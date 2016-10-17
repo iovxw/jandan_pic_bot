@@ -1,0 +1,11 @@
+[package]
+name = "jandan_pic_bot"
+version = "0.1.0"
+authors = ["iovxw <iovxw@outlook.com>"]
+
+[dependencies]
+regex = "0.1.*"
+hyper = "0.9.*"
+mioco = "0.8.*"
+serde_json = "0.8.*"
+select = {git = "https://github.com/utkarshkukreti/select.rs"}
