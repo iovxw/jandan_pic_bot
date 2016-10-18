@@ -18,6 +18,7 @@ const DUOSHUO_API: &'static str = "http://jandan.duoshuo.com/api/threads/listPos
 pub enum SpiderError {
     Io(io::Error),
     Net(hyper::error::Error),
+    Http(hyper::status::StatusCode),
     Json(serde_json::error::Error),
 }
 
@@ -66,7 +67,7 @@ pub fn get_comments(id: &str) -> SpiderResult<Vec<Comment>> {
     let client = Client::new();
     let res = try!(client.get(&url).send().map_err(SpiderError::Net));
     if !res.status.is_success() {
-        panic!(res.status);
+        return Err(SpiderError::Http(res.status));
     }
 
     let data: serde_json::Value = try!(serde_json::from_reader(res).map_err(SpiderError::Json));
@@ -94,11 +95,10 @@ pub fn get_list() -> SpiderResult<Vec<Pic>> {
 
     let mut res = try!(client.get(JANDAN_HOME).send().map_err(SpiderError::Net));
     if !res.status.is_success() {
-        panic!(res.status);
+        return Err(SpiderError::Http(res.status));
     }
 
     let document = try!(Document::from_read(&mut res).map_err(SpiderError::Io));
-
 
     document.find(Attr("id", "list-pic"))
         .next()
