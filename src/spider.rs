@@ -64,6 +64,12 @@ pub struct Pic {
 fn escape_html(comment: &str) -> String {
     let re = Regex::new(r#"<img\s*src="(?P<s>[^"]*)".*>"#).unwrap();
     re.replace_all(comment, "$s")
+        .replace("<br/>", "\n")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "*")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
 }
 
 pub fn get_comments(id: &str) -> SpiderResult<Vec<Comment>> {
