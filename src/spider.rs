@@ -61,6 +61,11 @@ pub struct Pic {
     pub comments: Vec<Comment>,
 }
 
+fn escape_html(comment: &str) -> String {
+    let re = Regex::new(r#"<img\s*src="(?P<s>[^"]*)".*>"#).unwrap();
+    re.replace_all(comment, "$s")
+}
+
 pub fn get_comments(id: &str) -> SpiderResult<Vec<Comment>> {
     let url = format!("{}?thread_key={}", DUOSHUO_API, id);
 
@@ -79,13 +84,19 @@ pub fn get_comments(id: &str) -> SpiderResult<Vec<Comment>> {
         .map(|result| result.unwrap())
         .map(|comment| {
             let author_info = comment.find("author").unwrap();
+            let author = author_info.find("name")
+                .expect("undefined \"name\" in comment")
+                .as_str().unwrap().to_string();
+            let likes = comment.find("likes")
+                .expect("undefined \"likes\" in comment")
+                .as_u64().unwrap();
+            let text = escape_html(comment.find("message")
+                                   .expect("undefined \"message\" in comment")
+                                   .as_str().unwrap());
             Ok(Comment {
-                author: author_info.find("name")
-                    .expect("undefined \"name\" in comment").as_str().unwrap().to_string(),
-                likes: comment.find("likes")
-                    .expect("undefined \"likes\" in comment").as_u64().unwrap(),
-                text: comment.find("message")
-                    .expect("undefined \"message\" in comment").as_str().unwrap().to_string()
+                author: author,
+                likes: likes,
+                text: text,
             })})
         .collect::<SpiderResult<Vec<Comment>>>()
 }
@@ -123,7 +134,7 @@ pub fn get_list() -> SpiderResult<Vec<Pic>> {
                       |text1, text2| if null_line.is_match(text2) { text1 } else { text1 + text2 });
 
             let images = x[1].find(Name("img"))
-                .map(|img| img.attr("src").unwrap().to_string())
+                .map(|img| img.attr("org_src").unwrap_or(img.attr("src").unwrap()).to_string())
                 .collect::<Vec<_>>();
 
             let vote = x[1].find(Class("vote")).next().unwrap()
