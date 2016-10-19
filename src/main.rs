@@ -35,7 +35,7 @@ fn main() {
     let api = Api::from_token(&token).unwrap();
 
     let channel_id = channel_id.parse::<i64>()
-        .unwrap_or(channel_id_to_int(&token, &channel_id));
+        .unwrap_or_else(|_| channel_id_to_int(&token, &channel_id));
 
     let data = spider::get_list().unwrap();
 
