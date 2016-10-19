@@ -2,6 +2,10 @@
 
 Telegram 煎蛋无聊图频道机器人
 
+频道: [@jandan_pic](https://telegram.me/jandan_pic)
+
+数据来自 [煎蛋网](http://jandan.net/)
+
 ## License
 
 This is free and unencumbered software released into the public domain.
