@@ -27,6 +27,13 @@ fn channel_id_to_int(bot_token: &str, id: &str) -> i64 {
     data.find("result").unwrap().find("id").unwrap().as_i64().unwrap()
 }
 
+fn telegram_md_escape(s: &str) -> String {
+    s.replace("[", "\\[")
+        .replace("*", "\\*")
+        .replace("_", "\\_")
+        .replace("`", "\\`")
+}
+
 fn main() {
     let token = std::env::args().nth(1)
         .expect("Need a Telegram bot token as argument");
@@ -74,10 +81,15 @@ fn main() {
                                      None, None, None, None);
         }
         let mut msg = format!("*{}*: {}\n{}\n*OO*: {} *XX*: {}",
-                              &pic.author, &pic.link, &pic.text, pic.oo, pic.xx);
+                              &pic.author,
+                              &pic.link,
+                              telegram_md_escape(&pic.text),
+                              pic.oo, pic.xx);
         for comment in &pic.comments {
             msg.push_str(&format!("\n*{}*: {}\n*❤️*: {}",
-                                 &comment.author, &comment.text, comment.likes));
+                                  &comment.author,
+                                  telegram_md_escape(&comment.text),
+                                  comment.likes));
         }
 
         let _ = api.send_message(channel_id, msg,
