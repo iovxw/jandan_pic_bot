@@ -47,20 +47,30 @@ fn main() {
         Err(_) => Vec::new(),
     };
 
-    let mut file = File::create("old_pic.list").unwrap();
-    serde_json::to_writer(&mut file, &data.iter()
-                          .map(|p| &p.id)
-                          .collect::<Vec<_>>()).unwrap();
+    let mut pic_id_list = data.iter()
+        .map(|p| &p.id)
+        .chain(old_pic.iter())
+        .collect::<Vec<_>>();
+    pic_id_list.sort(); // sort for more efficient deduplication
+    pic_id_list.dedup();
+    if pic_id_list.len() > 100 {
+        pic_id_list.reverse();
+        pic_id_list.truncate(100);
+        pic_id_list.reverse();
+    }
 
-    for pic in data {
+    let mut file = File::create("old_pic.list").unwrap();
+    serde_json::to_writer(&mut file, &pic_id_list).unwrap();
+
+    for pic in &data {
         if old_pic.contains(&pic.id) {
             continue;
         }
 
-        for img in pic.images {
+        for img in &pic.images {
             // this is a bug in telegram_bot, Result always Err
             // so ignore it
-            let _ = api.send_message(channel_id, img,
+            let _ = api.send_message(channel_id, img.to_string(),
                                      None, None, None, None);
         }
         let mut msg = format!("*{}*: {}\n{}\n*OO*: {} *XX*: {}",
