@@ -81,13 +81,13 @@ fn main() {
                                      None, None, None, None);
         }
         let mut msg = format!("*{}*: {}\n{}\n*OO*: {} *XX*: {}",
-                              &pic.author,
+                              &pic.author.replace("*", ""),
                               &pic.link,
                               telegram_md_escape(&pic.text),
                               pic.oo, pic.xx);
         for comment in &pic.comments {
             msg.push_str(&format!("\n*{}*: {}\n*❤️*: {}",
-                                  &comment.author,
+                                  &comment.author.replace("*", ""),
                                   telegram_md_escape(&comment.text),
                                   comment.likes));
         }
