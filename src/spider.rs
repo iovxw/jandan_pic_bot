@@ -62,10 +62,13 @@ pub struct Pic {
 }
 
 fn escape_html(comment: &str) -> String {
-    let re = Regex::new(r#"<img\s*src="(?P<s>[^"]*)".*>"#).unwrap();
-    re.replace_all(comment, "$s")
-        .replace("<br/>", "\n")
-        .replace("&quot;", "\"")
+    let img = Regex::new(r#"<img\s*src="(?P<s>[^"]*)".*>"#).unwrap();
+    let br = Regex::new(r#"<br ?/>\r?\n?"#).unwrap();
+
+    let result = img.replace_all(comment, " $s ");
+    let result = br.replace_all(&result, "\n");
+
+    result.replace("&quot;", "\"")
         .replace("&amp;", "*")
         .replace("&apos;", "'")
         .replace("&lt;", "<")
