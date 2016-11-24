@@ -14,7 +14,9 @@ fn channel_id_to_int(bot_token: &str, id: &str) -> i64 {
     if !id.starts_with('@') {
         panic!("Channel ID must be Integer or \"@channelusername\"");
     }
-    let url = format!("https://api.telegram.org/bot{}/getChat?chat_id={}", bot_token, id);
+    let url = format!("https://api.telegram.org/bot{}/getChat?chat_id={}",
+                      bot_token,
+                      id);
     let client = hyper::Client::new();
 
     let res = client.get(&url).send().unwrap();
@@ -35,9 +37,11 @@ fn telegram_md_escape(s: &str) -> String {
 }
 
 fn main() {
-    let token = std::env::args().nth(1)
+    let token = std::env::args()
+        .nth(1)
         .expect("Need a Telegram bot token as argument");
-    let channel_id = std::env::args().nth(2)
+    let channel_id = std::env::args()
+        .nth(2)
         .expect("Please specify a Telegram Channel");
     let api = Api::from_token(&token).unwrap();
 
@@ -50,7 +54,7 @@ fn main() {
         Ok(file) => {
             let l: serde_json::Value = serde_json::from_reader(file).unwrap();
             l.as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect()
-        },
+        }
         Err(_) => Vec::new(),
     };
 
@@ -77,14 +81,14 @@ fn main() {
         for img in &pic.images {
             // this is a bug in telegram_bot, Result always Err
             // so ignore it
-            let _ = api.send_message(channel_id, img.to_string(),
-                                     None, None, None, None);
+            let _ = api.send_message(channel_id, img.to_string(), None, None, None, None);
         }
         let mut msg = format!("*{}*: {}\n{}\n*OO*: {} *XX*: {}",
                               &pic.author.replace("*", ""),
                               &pic.link,
                               telegram_md_escape(&pic.text),
-                              pic.oo, pic.xx);
+                              pic.oo,
+                              pic.xx);
         for comment in &pic.comments {
             msg.push_str(&format!("\n*{}*: {}\n*❤️*: {}",
                                   &comment.author.replace("*", ""),
@@ -92,9 +96,12 @@ fn main() {
                                   comment.likes));
         }
 
-        let _ = api.send_message(channel_id, msg,
+        let _ = api.send_message(channel_id,
+                                 msg,
                                  Some(ParseMode::Markdown),
-                                 Some(true), None, None);
+                                 Some(true),
+                                 None,
+                                 None);
 
     }
 }

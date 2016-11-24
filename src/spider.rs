@@ -1,3 +1,5 @@
+use std::fmt;
+use std::error;
 use std::io;
 
 use regex::Regex;
@@ -22,6 +24,17 @@ pub enum SpiderError {
     Json(serde_json::error::Error),
 }
 
+impl fmt::Display for SpiderError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            SpiderError::Io(ref err) => err.fmt(f),
+            SpiderError::Net(ref err) => err.fmt(f),
+            SpiderError::Http(ref err) => err.fmt(f),
+            SpiderError::Json(ref err) => err.fmt(f),
+        }
+    }
+}
+
 impl From<io::Error> for SpiderError {
     fn from(err: io::Error) -> SpiderError {
         SpiderError::Io(err)
@@ -34,9 +47,38 @@ impl From<hyper::error::Error> for SpiderError {
     }
 }
 
+impl From<hyper::status::StatusCode> for SpiderError {
+    fn from(err: hyper::status::StatusCode) -> SpiderError {
+        SpiderError::Http(err)
+    }
+}
+
 impl From<serde_json::error::Error> for SpiderError {
     fn from(err: serde_json::error::Error) -> SpiderError {
         SpiderError::Json(err)
+    }
+}
+
+impl error::Error for SpiderError {
+    fn description(&self) -> &str {
+        match *self {
+            SpiderError::Io(ref err) => err.description(),
+            SpiderError::Net(ref err) => err.description(),
+            SpiderError::Http(ref err) => {
+                err.canonical_reason()
+                    .unwrap_or("Unknown HTTP status code")
+            }
+            SpiderError::Json(ref err) => err.description(),
+        }
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        match *self {
+            SpiderError::Io(ref err) => Some(err),
+            SpiderError::Net(ref err) => Some(err),
+            SpiderError::Http(_) => None,
+            SpiderError::Json(ref err) => Some(err),
+        }
     }
 }
 
@@ -79,15 +121,19 @@ pub fn get_comments(id: &str) -> SpiderResult<Vec<Comment>> {
     let url = format!("{}?thread_key={}", DUOSHUO_API, id);
 
     let client = Client::new();
-    let res = try!(client.get(&url).send().map_err(SpiderError::Net));
+    let res = try!(client.get(&url).send());
     if !res.status.is_success() {
         return Err(SpiderError::Http(res.status));
     }
 
-    let data: serde_json::Value = try!(serde_json::from_reader(res).map_err(SpiderError::Json));
+    let data: serde_json::Value = try!(serde_json::from_reader(res));
     let all_comments = data.find("parentPosts").unwrap();
 
-    data.find("hotPosts").unwrap().as_array().unwrap().iter()
+    data.find("hotPosts")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
         .map(|id| all_comments.find(id.as_str().unwrap()))
         .filter(|result| result.is_some())
         .map(|result| result.unwrap())
@@ -95,30 +141,35 @@ pub fn get_comments(id: &str) -> SpiderResult<Vec<Comment>> {
             let author_info = comment.find("author").unwrap();
             let author = author_info.find("name")
                 .expect("undefined \"name\" in comment")
-                .as_str().unwrap().to_string();
+                .as_str()
+                .unwrap()
+                .to_string();
             let likes = comment.find("likes")
                 .expect("undefined \"likes\" in comment")
-                .as_u64().unwrap();
+                .as_u64()
+                .unwrap();
             let text = escape_html(comment.find("message")
-                                   .expect("undefined \"message\" in comment")
-                                   .as_str().unwrap());
+                .expect("undefined \"message\" in comment")
+                .as_str()
+                .unwrap());
             Ok(Comment {
                 author: author,
                 likes: likes,
                 text: text,
-            })})
+            })
+        })
         .collect::<SpiderResult<Vec<Comment>>>()
 }
 
 pub fn get_list() -> SpiderResult<Vec<Pic>> {
     let client = Client::new();
 
-    let mut res = try!(client.get(JANDAN_HOME).send().map_err(SpiderError::Net));
+    let mut res = try!(client.get(JANDAN_HOME).send());
     if !res.status.is_success() {
         return Err(SpiderError::Http(res.status));
     }
 
-    let document = try!(Document::from_read(&mut res).map_err(SpiderError::Io));
+    let document = try!(Document::from_read(&mut res));
 
     document.find(Attr("id", "list-pic"))
         .next()
@@ -126,7 +177,7 @@ pub fn get_list() -> SpiderResult<Vec<Pic>> {
         .find(Class("acv_author").or(Class("acv_comment")))
         .collect::<Vec<_>>()
         .chunks(2)
-        .map (|x| {
+        .map(|x| {
             let author_raw = x[0].first_child().unwrap().text();
             let author_filter = Regex::new(r"^[^\s@]+").unwrap();
             let author = author_filter.captures(&author_raw).unwrap().at(0).unwrap().to_string();
@@ -136,23 +187,36 @@ pub fn get_list() -> SpiderResult<Vec<Pic>> {
             let id = link.split('#').last().unwrap().to_string();
 
             let null_line = Regex::new(r"^[\n\s]*$").unwrap();
-            let text = x[1].find(Name("p")).next().unwrap().children()
-                .filter(|node| if let &Data::Text(_) = node.data() { true } else { false })
+            let text = x[1].find(Name("p"))
+                .next()
+                .unwrap()
+                .children()
+                .filter(|node| if let &Data::Text(_) = node.data() {
+                    true
+                } else {
+                    false
+                })
                 .map(|text_node| text_node.as_text().unwrap())
-                .fold(String::new() ,
-                      |text1, text2| if null_line.is_match(text2) { text1 } else { text1 + text2 });
+                .fold(String::new(), |text1, text2| if null_line.is_match(text2) {
+                    text1
+                } else {
+                    text1 + text2
+                });
 
             let images = x[1].find(Name("img"))
                 .map(|img| img.attr("org_src").unwrap_or(img.attr("src").unwrap()).to_string())
                 .collect::<Vec<_>>();
 
-            let vote = x[1].find(Class("vote")).next().unwrap()
+            let vote = x[1].find(Class("vote"))
+                .next()
+                .unwrap()
                 .find(Name("span"))
                 .filter(|x| x.first_child().is_some())
-                .map(|x| x.text()).collect::<Vec<_>>();
+                .map(|x| x.text())
+                .collect::<Vec<_>>();
 
-            let oo = if let Some(oo) = vote.get(0) { oo.parse::<u32>().unwrap_or(0) } else { 0 };
-            let xx = if let Some(xx) = vote.get(1) { xx.parse::<u32>().unwrap_or(0) } else { 0 };
+            let oo = vote.get(0).map_or(0, |s| s.parse::<u32>().unwrap_or(0));
+            let xx = vote.get(1).map_or(0, |s| s.parse::<u32>().unwrap_or(0));
 
             let comments = try!(get_comments(&id));
 
