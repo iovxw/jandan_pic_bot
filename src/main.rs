@@ -1,11 +1,13 @@
 extern crate jandan_pic_bot;
-extern crate hyper;
+extern crate curl;
 extern crate serde_json;
 extern crate telegram_bot;
 
 use jandan_pic_bot::*;
 
 use std::fs::File;
+
+use curl::easy::Easy;
 
 use telegram_bot::Api;
 use telegram_bot::ParseMode;
@@ -17,11 +19,21 @@ fn channel_id_to_int(bot_token: &str, id: &str) -> i64 {
     let url = format!("https://api.telegram.org/bot{}/getChat?chat_id={}",
                       bot_token,
                       id);
-    let client = hyper::Client::new();
+    let mut buf: Vec<u8> = Vec::new();
 
-    let res = client.get(&url).send().unwrap();
+    let mut client = Easy::new();
+    client.url(&url).unwrap();
+    {
+        let mut transfer = client.transfer();
+        transfer.write_function(|data| {
+                buf.extend_from_slice(data);
+                Ok(data.len())
+            })
+            .unwrap();
+        transfer.perform().unwrap();
+    }
 
-    let data: serde_json::Value = serde_json::from_reader(res).unwrap();
+    let data: serde_json::Value = serde_json::from_slice(&buf).unwrap();
     if !data.find("ok").unwrap().as_bool().unwrap() {
         panic!(data.find("description").unwrap().as_str().unwrap().to_string());
     }

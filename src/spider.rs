@@ -4,8 +4,8 @@ use std::io;
 
 use regex::Regex;
 
-use hyper;
-use hyper::client::Client;
+use curl;
+use curl::easy::Easy;
 
 use serde_json;
 
@@ -13,14 +13,13 @@ use select::document::Document;
 use select::node::Data;
 use select::predicate::{Predicate, Attr, Class, Name};
 
-const JANDAN_HOME: &'static str = "http://jandan.net/";
+const JANDAN_HOME: &'static str = "https://jandan.net/";
 const DUOSHUO_API: &'static str = "http://jandan.duoshuo.com/api/threads/listPosts.json";
 
 #[derive(Debug)]
 pub enum SpiderError {
     Io(io::Error),
-    Net(hyper::error::Error),
-    Http(hyper::status::StatusCode),
+    Net(curl::Error),
     Json(serde_json::error::Error),
 }
 
@@ -29,7 +28,6 @@ impl fmt::Display for SpiderError {
         match *self {
             SpiderError::Io(ref err) => err.fmt(f),
             SpiderError::Net(ref err) => err.fmt(f),
-            SpiderError::Http(ref err) => err.fmt(f),
             SpiderError::Json(ref err) => err.fmt(f),
         }
     }
@@ -41,15 +39,9 @@ impl From<io::Error> for SpiderError {
     }
 }
 
-impl From<hyper::error::Error> for SpiderError {
-    fn from(err: hyper::error::Error) -> SpiderError {
+impl From<curl::Error> for SpiderError {
+    fn from(err: curl::Error) -> SpiderError {
         SpiderError::Net(err)
-    }
-}
-
-impl From<hyper::status::StatusCode> for SpiderError {
-    fn from(err: hyper::status::StatusCode) -> SpiderError {
-        SpiderError::Http(err)
     }
 }
 
@@ -64,10 +56,6 @@ impl error::Error for SpiderError {
         match *self {
             SpiderError::Io(ref err) => err.description(),
             SpiderError::Net(ref err) => err.description(),
-            SpiderError::Http(ref err) => {
-                err.canonical_reason()
-                    .unwrap_or("Unknown HTTP status code")
-            }
             SpiderError::Json(ref err) => err.description(),
         }
     }
@@ -76,7 +64,6 @@ impl error::Error for SpiderError {
         match *self {
             SpiderError::Io(ref err) => Some(err),
             SpiderError::Net(ref err) => Some(err),
-            SpiderError::Http(_) => None,
             SpiderError::Json(ref err) => Some(err),
         }
     }
@@ -120,13 +107,22 @@ fn escape_html(comment: &str) -> String {
 pub fn get_comments(id: &str) -> SpiderResult<Vec<Comment>> {
     let url = format!("{}?thread_key={}", DUOSHUO_API, id);
 
-    let client = Client::new();
-    let res = try!(client.get(&url).send());
-    if !res.status.is_success() {
-        return Err(SpiderError::Http(res.status));
+    let mut buf: Vec<u8> = Vec::new();
+
+    let mut client = Easy::new();
+    client.url(&url).unwrap();
+    client.follow_location(true).unwrap();
+    {
+        let mut transfer = client.transfer();
+        transfer.write_function(|data| {
+                buf.extend_from_slice(data);
+                Ok(data.len())
+            })
+            .unwrap();
+        try!(transfer.perform());
     }
 
-    let data: serde_json::Value = try!(serde_json::from_reader(res));
+    let data: serde_json::Value = try!(serde_json::from_slice(&buf));
     let all_comments = data.find("parentPosts").unwrap();
 
     data.find("hotPosts")
@@ -162,14 +158,26 @@ pub fn get_comments(id: &str) -> SpiderResult<Vec<Comment>> {
 }
 
 pub fn get_list() -> SpiderResult<Vec<Pic>> {
-    let client = Client::new();
+    let mut buf: Vec<u8> = Vec::new();
 
-    let mut res = try!(client.get(JANDAN_HOME).send());
-    if !res.status.is_success() {
-        return Err(SpiderError::Http(res.status));
+    let mut client = Easy::new();
+    client.url(JANDAN_HOME).unwrap();
+    client.follow_location(true).unwrap();
+    // jandan.net's certificate is invalid (CN is *.jandan.net), ignore it
+    client.ssl_verify_peer(false).unwrap();
+    {
+        let mut transfer = client.transfer();
+        transfer.write_function(|data| {
+                buf.extend_from_slice(data);
+                Ok(data.len())
+            })
+            .unwrap();
+        try!(transfer.perform());
     }
 
-    let document = try!(Document::from_read(&mut res));
+    let buf = io::Cursor::new(buf);
+
+    let document = try!(Document::from_read(buf));
 
     document.find(Attr("id", "list-pic"))
         .next()

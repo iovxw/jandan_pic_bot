@@ -1,5 +1,5 @@
 extern crate regex;
-extern crate hyper;
+extern crate curl;
 extern crate select;
 extern crate serde_json;
 
