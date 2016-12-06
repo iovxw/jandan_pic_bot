@@ -1,10 +1,7 @@
-use std::fmt;
-use std::error;
 use std::io;
 
 use regex::Regex;
 
-use curl;
 use curl::easy::Easy;
 
 use serde_json;
@@ -13,63 +10,10 @@ use select::document::Document;
 use select::node::Data;
 use select::predicate::{Predicate, Attr, Class, Name};
 
+use errors::*;
+
 const JANDAN_HOME: &'static str = "https://jandan.net/";
 const DUOSHUO_API: &'static str = "http://jandan.duoshuo.com/api/threads/listPosts.json";
-
-#[derive(Debug)]
-pub enum SpiderError {
-    Io(io::Error),
-    Net(curl::Error),
-    Json(serde_json::error::Error),
-}
-
-impl fmt::Display for SpiderError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            SpiderError::Io(ref err) => err.fmt(f),
-            SpiderError::Net(ref err) => err.fmt(f),
-            SpiderError::Json(ref err) => err.fmt(f),
-        }
-    }
-}
-
-impl From<io::Error> for SpiderError {
-    fn from(err: io::Error) -> SpiderError {
-        SpiderError::Io(err)
-    }
-}
-
-impl From<curl::Error> for SpiderError {
-    fn from(err: curl::Error) -> SpiderError {
-        SpiderError::Net(err)
-    }
-}
-
-impl From<serde_json::error::Error> for SpiderError {
-    fn from(err: serde_json::error::Error) -> SpiderError {
-        SpiderError::Json(err)
-    }
-}
-
-impl error::Error for SpiderError {
-    fn description(&self) -> &str {
-        match *self {
-            SpiderError::Io(ref err) => err.description(),
-            SpiderError::Net(ref err) => err.description(),
-            SpiderError::Json(ref err) => err.description(),
-        }
-    }
-
-    fn cause(&self) -> Option<&error::Error> {
-        match *self {
-            SpiderError::Io(ref err) => Some(err),
-            SpiderError::Net(ref err) => Some(err),
-            SpiderError::Json(ref err) => Some(err),
-        }
-    }
-}
-
-type SpiderResult<T> = Result<T, SpiderError>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
@@ -104,7 +48,7 @@ fn escape_html(comment: &str) -> String {
         .replace("&gt;", ">")
 }
 
-pub fn get_comments(id: &str) -> SpiderResult<Vec<Comment>> {
+pub fn get_comments(id: &str) -> Result<Vec<Comment>> {
     let url = format!("{}?thread_key={}", DUOSHUO_API, id);
 
     let mut buf: Vec<u8> = Vec::new();
@@ -154,10 +98,10 @@ pub fn get_comments(id: &str) -> SpiderResult<Vec<Comment>> {
                 text: text,
             })
         })
-        .collect::<SpiderResult<Vec<Comment>>>()
+        .collect::<Result<Vec<Comment>>>()
 }
 
-pub fn get_list() -> SpiderResult<Vec<Pic>> {
+pub fn get_list() -> Result<Vec<Pic>> {
     let mut buf: Vec<u8> = Vec::new();
 
     let mut client = Easy::new();
@@ -239,5 +183,5 @@ pub fn get_list() -> SpiderResult<Vec<Pic>> {
                 comments: comments,
             })
         })
-        .collect::<SpiderResult<Vec<Pic>>>()
+        .collect::<Result<Vec<Pic>>>()
 }
