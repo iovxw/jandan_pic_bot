@@ -1,16 +1,19 @@
 extern crate jandan_pic_bot;
 extern crate curl;
 extern crate serde_json;
-extern crate telegram_bot;
+extern crate futures;
+extern crate tokio_core;
+extern crate telebot;
 
 use jandan_pic_bot::*;
 
 use std::fs::File;
 
 use curl::easy::Easy;
-
-use telegram_bot::Api;
-use telegram_bot::ParseMode;
+use futures::*;
+use tokio_core::reactor::Core;
+use telebot::bot;
+use telebot::functions::*;
 
 fn channel_id_to_int(bot_token: &str, id: &str) -> i64 {
     if !id.starts_with('@') {
@@ -55,7 +58,10 @@ fn main() {
     let channel_id = std::env::args()
         .nth(2)
         .expect("Please specify a Telegram Channel");
-    let api = Api::from_token(&token).unwrap();
+
+    let mut lp = Core::new().unwrap();
+
+    let bot = bot::RcBot::new(lp.handle(), &token);
 
     let channel_id = channel_id.parse::<i64>()
         .unwrap_or_else(|_| channel_id_to_int(&token, &channel_id));
@@ -85,15 +91,15 @@ fn main() {
     let mut file = File::create("old_pic.list").unwrap();
     serde_json::to_writer(&mut file, &pic_id_list).unwrap();
 
+    let mut msgs = Vec::new();
+
     for pic in &data {
         if old_pic.contains(&pic.id) {
             continue;
         }
 
         for img in &pic.images {
-            // this is a bug in telegram_bot, Result always Err
-            // so ignore it
-            let _ = api.send_message(channel_id, img.to_string(), None, None, None, None);
+            msgs.push(bot.message(channel_id, img.to_owned()));
         }
         let mut msg = format!("*{}*: {}\n{}*OO*: {} *XX*: {}",
                               &pic.author.replace("*", ""),
@@ -108,12 +114,16 @@ fn main() {
                                   comment.likes));
         }
 
-        let _ = api.send_message(channel_id,
-                                 msg,
-                                 Some(ParseMode::Markdown),
-                                 Some(true),
-                                 None,
-                                 None);
-
+        msgs.push(bot.message(channel_id, msg)
+            .parse_mode("Markdown")
+            .disable_web_page_preview(true));
     }
+
+    let mut future = futures::future::ok(()).boxed() as
+                     Box<Future<Item = (), Error = telebot::Error>>;
+    for msg in msgs {
+        future = Box::new(future.and_then(|_| msg.send().and_then(|_| Ok(())))) as
+                 Box<Future<Item = (), Error = telebot::Error>>
+    }
+    lp.run(future).unwrap();
 }

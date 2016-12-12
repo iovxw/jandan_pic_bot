@@ -6,7 +6,9 @@ authors = ["iovxw <iovxw@outlook.com>"]
 [dependencies]
 error-chain = "0.7"
 regex = "0.1"
-curl = "0.3"
+curl = "0.4"
 serde_json = "0.8"
-telegram-bot = "0.4"
+futures = "0.1"
+tokio-core = "0.1"
+telebot = "0.1"
 select = {git = "https://github.com/utkarshkukreti/select.rs"}
