@@ -95,7 +95,7 @@ fn main() {
             // so ignore it
             let _ = api.send_message(channel_id, img.to_string(), None, None, None, None);
         }
-        let mut msg = format!("*{}*: {}\n{}\n*OO*: {} *XX*: {}",
+        let mut msg = format!("*{}*: {}\n{}*OO*: {} *XX*: {}",
                               &pic.author.replace("*", ""),
                               &pic.link,
                               telegram_md_escape(&pic.text),
