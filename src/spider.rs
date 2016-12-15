@@ -1,4 +1,5 @@
 use std::io;
+use std::time::Duration;
 
 use regex::Regex;
 
@@ -55,6 +56,7 @@ pub fn get_comments(id: &str) -> Result<Vec<Comment>> {
 
     let mut client = Easy::new();
     client.url(&url).unwrap();
+    client.timeout(Duration::from_secs(10)).unwrap();
     client.follow_location(true).unwrap();
     {
         let mut transfer = client.transfer();
@@ -67,17 +69,18 @@ pub fn get_comments(id: &str) -> Result<Vec<Comment>> {
     }
 
     let data: serde_json::Value = try!(serde_json::from_slice(&buf));
-    let all_comments = data.find("parentPosts").unwrap();
+    let comment_data = data.find("parentPosts")
+        .expect("can not find parentPosts");
 
-    data.find("hotPosts")
-        .unwrap()
+    let mut comments = data.find("response")
+        .expect("can not find response")
         .as_array()
-        .unwrap()
+        .expect("response is not array")
         .iter()
-        .map(|id| all_comments.find(id.as_str().unwrap()))
-        .filter(|result| result.is_some())
-        .map(|result| result.unwrap())
-        .map(|comment| {
+        .map(|comment_id| {
+            let comment_id = comment_id.as_str().unwrap();
+            let comment = comment_data.find(comment_id).unwrap();
+
             let author_info = comment.find("author").unwrap();
             let author = author_info.find("name")
                 .expect("undefined \"name\" in comment")
@@ -92,13 +95,20 @@ pub fn get_comments(id: &str) -> Result<Vec<Comment>> {
                 .expect("undefined \"message\" in comment")
                 .as_str()
                 .unwrap());
-            Ok(Comment {
+            Comment {
                 author: author,
                 likes: likes,
                 text: text,
-            })
+            }
         })
-        .collect::<Result<Vec<Comment>>>()
+        .collect::<Vec<Comment>>();
+
+    if comments.len() > 3 {
+        comments.sort_by(|c1, c2| c2.likes.cmp(&c1.likes));
+        comments.truncate(3);
+    }
+
+    Ok(comments)
 }
 
 pub fn get_list() -> Result<Vec<Pic>> {
@@ -106,6 +116,7 @@ pub fn get_list() -> Result<Vec<Pic>> {
 
     let mut client = Easy::new();
     client.url(JANDAN_HOME).unwrap();
+    client.timeout(Duration::from_secs(10)).unwrap();
     client.follow_location(true).unwrap();
     // jandan.net's certificate is invalid (CN is *.jandan.net), ignore it
     client.ssl_verify_peer(false).unwrap();
@@ -125,7 +136,7 @@ pub fn get_list() -> Result<Vec<Pic>> {
 
     document.find(Attr("id", "list-pic"))
         .next()
-        .unwrap()
+        .expect("can not find #list-pic")
         .find(Class("acv_author").or(Class("acv_comment")))
         .collect::<Vec<_>>()
         .chunks(2)
@@ -139,24 +150,33 @@ pub fn get_list() -> Result<Vec<Pic>> {
             let id = link.split('#').last().unwrap().to_string();
 
             let null_line = Regex::new(r"^[\n\s]*$").unwrap();
-            let text = x[1].find(Name("p"))
-                .next()
-                .unwrap()
-                .children()
-                .filter(|node| if let &Data::Text(_) = node.data() {
-                    true
-                } else {
-                    false
-                })
-                .map(|text_node| text_node.as_text().unwrap())
-                .fold(String::new(), |text1, text2| if null_line.is_match(text2) {
-                    text1
-                } else {
-                    text1 + text2
-                });
+            let mut text = String::new();
+            for p in x[1].find(Name("p")) {
+                let lines = p.children()
+                    .filter(|node| if let &Data::Text(_) = node.data() {
+                        true
+                    } else {
+                        false
+                    })
+                    .map(|text_node| text_node.as_text().unwrap());
+                for line in lines {
+                    if !null_line.is_match(line) {
+                        text.push_str(line);
+                    }
+                }
+                text.push('\n');
+            }
 
             let images = x[1].find(Name("img"))
                 .map(|img| img.attr("org_src").unwrap_or(img.attr("src").unwrap()).to_string())
+                .map(|src| if src.starts_with("//") {
+                    let mut s = String::with_capacity(6 + src.len());
+                    s.push_str("https:");
+                    s.push_str(&src);
+                    s
+                } else {
+                    src
+                })
                 .collect::<Vec<_>>();
 
             let vote = x[1].find(Class("vote"))
