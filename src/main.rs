@@ -8,6 +8,7 @@ extern crate telebot;
 use jandan_pic_bot::*;
 
 use std::fs::File;
+use std::time::Duration;
 
 use curl::easy::Easy;
 use futures::*;
@@ -26,6 +27,7 @@ fn channel_id_to_int(bot_token: &str, id: &str) -> i64 {
 
     let mut client = Easy::new();
     client.url(&url).unwrap();
+    client.timeout(Duration::from_secs(10)).unwrap();
     {
         let mut transfer = client.transfer();
         transfer.write_function(|data| {
