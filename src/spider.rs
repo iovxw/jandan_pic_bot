@@ -76,20 +76,17 @@ pub fn get_comments(id: &str) -> Result<Vec<Comment>> {
         .and_then(|r| r.as_array()).ok_or("can not find response or response is not array")?.iter()
         .filter_map(|comment_id| comment_id.as_str())
         .filter_map(|comment_id| comment_data.find(comment_id))
-        .filter_map(|comment| {
-            if let (Some(author), Some(likes), Some(text)) = (
-                comment.find("author").and_then(|a| a.find("name")).and_then(|n| n.as_str()),
-                comment.find("likes").and_then(|l| l.as_u64()),
-                comment.find("message").and_then(|m| m.as_str())
-            ) {
-                Some(Comment {
-                    author: author.to_string(),
-                    likes: likes,
-                    text: escape_html(text)
-                })
-            } else {
-                None
-            }
+        .map(|comment| match (
+            comment.find("author").and_then(|a| a.find("name")).and_then(|n| n.as_str()),
+            comment.find("likes").and_then(|l| l.as_u64()),
+            comment.find("message").and_then(|m| m.as_str())
+        ) {
+            (Some(author), Some(likes), Some(text)) => Comment {
+                author: author.to_string(),
+                likes: likes,
+                text: escape_html(text)
+            },
+            err => panic!("response format error: (author, likes, message) => {:?}", err)
         })
         .collect::<Vec<Comment>>();
 
@@ -143,16 +140,17 @@ pub fn get_list() -> Result<Vec<Pic>> {
                 .to_string();
 
             let text = x1.find(Name("p")).iter()
-                .filter_map(|p| p.children().first().map(|n| n.text()))
+                .map(|p| p.children().first().map(|n| n.text()).unwrap())
                 .filter(|line| !NULL_LINE_FILTER.is_match(&line))
                 .collect::<Vec<_>>()
                 .join("\n");
 
             let images = x1.find(Name("img")).next().iter()
-                .filter_map(|img| img
+                .map(|img| img
                     .attr("org_src")
                     .or_else(|| img.attr("src"))
                     .map(|src| src.to_string())
+                    .unwrap()
                 )
                 .map(|src| if src.starts_with("//") {
                     format!("https:{}", src)
@@ -161,9 +159,9 @@ pub fn get_list() -> Result<Vec<Pic>> {
                 })
                 .collect::<Vec<_>>();
 
-            let vote = x1.find(Class("vote")).iter()
-                .map(|v| v.find(Name("span")))
-                .filter_map(|v| v.first())
+            let vote = x1.find(Class("vote")).first().ok_or("can not found vote")?
+                .find(Name("span")).iter()
+                .filter_map(|v| v.next())
                 .map(|v| v.text())
                 .collect::<Vec<_>>();
 
