@@ -4,6 +4,7 @@ extern crate serde_json;
 extern crate telegram_bot;
 
 use jandan_pic_bot::*;
+use jandan_pic_bot::errors::*;
 
 use std::fs::File;
 
@@ -12,7 +13,7 @@ use curl::easy::Easy;
 use telegram_bot::Api;
 use telegram_bot::ParseMode;
 
-fn channel_id_to_int(bot_token: &str, id: &str) -> i64 {
+fn channel_id_to_int(bot_token: &str, id: &str) -> Result<i64> {
     if !id.starts_with('@') {
         panic!("Channel ID must be Integer or \"@channelusername\"");
     }
@@ -22,23 +23,29 @@ fn channel_id_to_int(bot_token: &str, id: &str) -> i64 {
     let mut buf: Vec<u8> = Vec::new();
 
     let mut client = Easy::new();
-    client.url(&url).unwrap();
+    client.url(&url)?;
     {
         let mut transfer = client.transfer();
         transfer.write_function(|data| {
                 buf.extend_from_slice(data);
                 Ok(data.len())
-            })
-            .unwrap();
-        transfer.perform().unwrap();
+            })?;
+        transfer.perform()?;
     }
 
-    let data: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-    if !data.find("ok").unwrap().as_bool().unwrap() {
-        panic!(data.find("description").unwrap().as_str().unwrap().to_string());
+    let data = serde_json::from_slice::<serde_json::Value>(&buf)?;
+    if !data.find("ok").and_then(|ok| ok.as_bool()).unwrap_or(false) {
+        panic!(data
+            .find("description")
+            .and_then(|s| s.as_str().map(|s| s.to_string()))
+            .ok_or("can not find description")?
+        );
     }
 
-    data.find("result").unwrap().find("id").unwrap().as_i64().unwrap()
+    data.find("result")
+        .and_then(|d| d.find("id"))
+        .and_then(|id| id.as_i64())
+        .ok_or_else(|| "can not find result".into())
 }
 
 fn telegram_md_escape(s: &str) -> String {
@@ -58,7 +65,8 @@ fn main() {
     let api = Api::from_token(&token).unwrap();
 
     let channel_id = channel_id.parse::<i64>()
-        .unwrap_or_else(|_| channel_id_to_int(&token, &channel_id));
+        .or_else(|_| channel_id_to_int(&token, &channel_id))
+        .unwrap();
 
     let data = spider::get_list().unwrap();
 
