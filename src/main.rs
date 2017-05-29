@@ -30,20 +30,30 @@ fn channel_id_to_int(bot_token: &str, id: &str) -> i64 {
     client.timeout(Duration::from_secs(10)).unwrap();
     {
         let mut transfer = client.transfer();
-        transfer.write_function(|data| {
-                buf.extend_from_slice(data);
-                Ok(data.len())
-            })
+        transfer
+            .write_function(|data| {
+                                buf.extend_from_slice(data);
+                                Ok(data.len())
+                            })
             .unwrap();
         transfer.perform().unwrap();
     }
 
     let data: serde_json::Value = serde_json::from_slice(&buf).unwrap();
-    if !data.find("ok").unwrap().as_bool().unwrap() {
-        panic!(data.find("description").unwrap().as_str().unwrap().to_string());
+    if !data.get("ok").unwrap().as_bool().unwrap() {
+        panic!(data.get("description")
+                   .unwrap()
+                   .as_str()
+                   .unwrap()
+                   .to_string());
     }
 
-    data.find("result").unwrap().find("id").unwrap().as_i64().unwrap()
+    data.get("result")
+        .unwrap()
+        .get("id")
+        .unwrap()
+        .as_i64()
+        .unwrap()
 }
 
 fn telegram_md_escape(s: &str) -> String {
@@ -65,7 +75,8 @@ fn main() {
 
     let bot = bot::RcBot::new(lp.handle(), &token);
 
-    let channel_id = channel_id.parse::<i64>()
+    let channel_id = channel_id
+        .parse::<i64>()
         .unwrap_or_else(|_| channel_id_to_int(&token, &channel_id));
 
     let data = spider::get_list().unwrap();
@@ -73,7 +84,11 @@ fn main() {
     let old_pic = match File::open("old_pic.list") {
         Ok(file) => {
             let l: serde_json::Value = serde_json::from_reader(file).unwrap();
-            l.as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect()
+            l.as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap().to_string())
+                .collect()
         }
         Err(_) => Vec::new(),
     };
@@ -110,15 +125,16 @@ fn main() {
                               pic.oo,
                               pic.xx);
         for comment in &pic.comments {
-            msg.push_str(&format!("\n*{}*: {}\n*❤️*: {}",
-                                  &comment.author.replace("*", ""),
-                                  telegram_md_escape(&comment.text),
-                                  comment.likes));
+            msg.push_str(&format!("\n*{}*: {}\n*OO*: {}, *XX*: {}",
+                                 &comment.author.replace("*", ""),
+                                 telegram_md_escape(&comment.content),
+                                 comment.oo,
+                                 comment.xx));
         }
 
         msgs.push(bot.message(channel_id, msg)
-            .parse_mode("Markdown")
-            .disable_web_page_preview(true));
+                      .parse_mode("Markdown")
+                      .disable_web_page_preview(true));
     }
 
     let mut future = futures::future::ok(()).boxed() as

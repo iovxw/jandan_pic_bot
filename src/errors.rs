@@ -3,5 +3,6 @@ error_chain! {
         Io(::std::io::Error);
         Net(::curl::Error);
         Json(::serde_json::error::Error);
+        Num(::std::num::ParseIntError);
     }
 }
