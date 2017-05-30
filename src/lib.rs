@@ -2,7 +2,7 @@
 extern crate error_chain;
 extern crate regex;
 extern crate curl;
-extern crate select;
+extern crate kuchiki;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde;

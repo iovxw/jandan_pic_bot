@@ -1,26 +1,21 @@
-use std::io;
 use std::time::Duration;
 
 use regex::Regex;
-
 use curl::easy::Easy;
-
 use serde_json;
-
-use select::document::Document;
-use select::node::Data;
-use select::predicate::{Predicate, Attr, Class, Name};
+use kuchiki;
+use kuchiki::traits::*;
 
 use errors::*;
 
-const JANDAN_HOME: &'static str = "https://jandan.net/";
+const JANDAN_HOME: &'static str = "http://jandan.net/";
 const TUCAO_API: &'static str = "http://jandan.net/tucao/";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
     pub author: String,
-    pub xx: u32,
     pub oo: u32,
+    pub xx: u32,
     pub content: String,
 }
 
@@ -70,6 +65,17 @@ fn escape_comment_content(s: String) -> String {
         .replace("<br />\n", "\n")
 }
 
+fn fix_scheme(s: String) -> String {
+    if s.starts_with("//") {
+        let mut ns = String::with_capacity(6 + s.len());
+        ns.push_str("https:");
+        ns.push_str(&s);
+        ns
+    } else {
+        s
+    }
+}
+
 pub fn get_comments(id: &str) -> Result<Vec<Comment>> {
     let url = format!("{}{}", TUCAO_API, id);
 
@@ -108,6 +114,11 @@ pub fn get_comments(id: &str) -> Result<Vec<Comment>> {
         })
 }
 
+#[inline]
+fn image_name(link: &str) -> &str {
+    link.split('/').last().unwrap_or("")
+}
+
 pub fn get_list() -> Result<Vec<Pic>> {
     let mut buf: Vec<u8> = Vec::new();
 
@@ -128,104 +139,128 @@ pub fn get_list() -> Result<Vec<Pic>> {
         try!(transfer.perform());
     }
 
-    let buf = io::Cursor::new(buf);
+    let html = String::from_utf8(buf)
+        .chain_err(|| "response is not UTF-8")?;
 
-    let document = try!(Document::from_read(buf));
+    let document = kuchiki::parse_html().one(html);
 
     document
-        .find(Attr("id", "list-pic"))
-        .next()
-        .expect("can not find #list-pic")
-        .find(Class("acv_author")
-                  .or(Class("acv_comment"))
-                  .or(Class("jandan-vote")))
+        .select("#list-pic .acv_author, #list-pic .acv_comment, #list-pic .jandan-vote")
+        .unwrap()
         .collect::<Vec<_>>()
         .chunks(3)
         .map(|x| {
-            let acv_author = x[0];
-            let acv_comment = x[1];
-            let jandan_vote = x[2];
+            assert_eq!(x.len(), 3);
+            let acv_author = x[0].as_node();
+            let acv_comment = x[1].as_node();
+            let jandan_vote = x[2].as_node();
 
-            let author = Regex::new(r"^[^\s@]+")
+            let author_raw = acv_author.first_child().unwrap();
+            let author = author_raw
+                .as_text()
                 .unwrap()
-                .captures(&acv_author.first_child().unwrap().text())
-                .unwrap()
-                .at(0)
-                .expect("no author")
-                .to_string();
-
-            let link = acv_author
-                .find(Name("a"))
+                .borrow()
+                .split('@')
                 .next()
-                .unwrap()
-                .attr("href")
-                .expect("no link")
-                .to_string();
+                .ok_or("no author")?
+                .trim()
+                .to_owned();
 
-            let null_line = Regex::new(r"^[\n\s]*$").unwrap();
+            let link_raw = acv_author
+                .select("a[href]")
+                .map_err(|_| "")?
+                .next()
+                .ok_or("no \"a[href]\" in \".acv_author\"")?;
+            let link = link_raw
+                .as_node()
+                .as_element()
+                .unwrap()
+                .attributes
+                .borrow()
+                .get("href")
+                .unwrap()
+                .to_owned();
+
+            let empty_line = Regex::new(r"^[\n\s]*$").unwrap();
             let mut text = String::new();
-            for p in acv_comment.find(Name("p")) {
-                let lines = p.children()
-                    .filter(|node| if let &Data::Text(_) = node.data() {
-                                true
-                            } else {
-                                false
-                            })
-                    .map(|text_node| text_node.as_text().unwrap());
-                for line in lines {
-                    if !null_line.is_match(line) {
-                        text.push_str(line);
+            for p in acv_comment.select("p").map_err(|_| "")? {
+                for node in p.as_node().children() {
+                    if let Some(line) = node.as_text() {
+                        let line = line.borrow();
+                        if !empty_line.is_match(&line) {
+                            text.push_str(&line);
+                            text.push('\n');
+                        }
                     }
                 }
-                text.push('\n');
             }
 
-            let images = x[1]
-                .find(Class("view_img_link"))
-                .map(|img| {
-                         img.attr("href")
-                             .expect("no href in view_img_link")
-                             .to_string()
-                     })
-                .map(|src| if src.starts_with("//") {
-                         let mut s = String::with_capacity(6 + src.len());
-                         s.push_str("https:");
-                         s.push_str(&src);
-                         s
-                     } else {
-                         src
-                     })
-                .collect::<Vec<_>>();
+            let mut prev_name = String::new();
+            let images = acv_comment
+                .select("a.view_img_link[href], img[org_src], img[src]")
+                .unwrap()
+                .filter_map(|img| {
+                    let attrs = img.as_node().as_element().unwrap().attributes.borrow();
+                    let src = attrs
+                        .get("href")
+                        .or_else(|| attrs.get("org_src"))
+                        .or_else(|| attrs.get("src"))
+                        .ok_or("no org_src or src in \".acv_comment img\"");
+                    if let Err(e) = src {
+                        return Some(Err(e.into()));
+                    }
+                    let src = src.unwrap();
+                    let name = image_name(&src);
+                    if prev_name != name {
+                        prev_name.clear();
+                        prev_name.push_str(name);
+                        Some(Ok(fix_scheme(src.to_owned())))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
 
             let vote = jandan_vote
-                .find(Name("span"))
-                .filter(|x| x.first_child().is_some())
-                .map(|x| x.text())
-                .collect::<Vec<_>>();
+                .select("span")
+                .unwrap()
+                .filter_map(|x| {
+                    x.as_node()
+                        .first_child()
+                        .and_then(|x| x.as_text().map(|x| x.borrow().parse().unwrap_or(0)))
+                })
+                .collect::<Vec<u32>>();
 
-            let oo = vote.get(0).map_or(0, |s| s.parse::<u32>().unwrap_or(0));
-            let xx = vote.get(1).map_or(0, |s| s.parse::<u32>().unwrap_or(0));
+            assert_eq!(vote.len(), 2);
+            let oo = vote[0];
+            let xx = vote[1];
 
             let id = jandan_vote
-                .find(Name("a"))
-                .map(|a| a.attr("data-id"))
-                .filter(|x| x.is_some())
-                .map(|x| x.unwrap())
-                .next()
+                .select("a[data-id]")
                 .unwrap()
-                .to_string();
+                .filter_map(|a| {
+                    a.as_node()
+                        .as_element()
+                        .unwrap()
+                        .attributes
+                        .borrow()
+                        .get("data-id")
+                        .map(|x| x.to_owned())
+                })
+                .next()
+                .ok_or("no \"a[data-id]\" in \".jandan-vote\"")?;
 
             let comments = try!(get_comments(&id));
 
             Ok(Pic {
-                   author: author,
-                   link: link,
-                   id: id,
-                   oo: oo,
-                   xx: xx,
-                   text: text,
-                   images: images,
-                   comments: comments,
+                   author,
+                   link,
+                   id,
+                   oo,
+                   xx,
+                   text,
+                   images,
+                   comments,
                })
         })
         .collect::<Result<Vec<Pic>>>()
