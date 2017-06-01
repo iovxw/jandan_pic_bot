@@ -1,17 +1,28 @@
-extern crate jandan_pic_bot;
+#![feature(conservative_impl_trait)]
+
 extern crate curl;
-extern crate serde_json;
+extern crate tokio_curl;
 extern crate futures;
 extern crate tokio_core;
 extern crate telebot;
+#[macro_use]
+extern crate error_chain;
+extern crate regex;
+extern crate kuchiki;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+extern crate serde_json;
 
-use jandan_pic_bot::*;
+mod errors;
+mod spider;
 
 use std::fs::File;
 use std::time::Duration;
 
 use curl::easy::Easy;
-use futures::*;
+use futures::{Future, Stream};
+use tokio_curl::Session;
 use tokio_core::reactor::Core;
 use telebot::bot;
 use telebot::functions::*;
@@ -79,7 +90,9 @@ fn main() {
         .parse::<i64>()
         .unwrap_or_else(|_| channel_id_to_int(&token, &channel_id));
 
-    let data = spider::get_list().unwrap();
+    let session = Session::new(lp.handle());
+
+    let data = spider::get_list(session);
 
     let old_pic = match File::open("old_pic.list") {
         Ok(file) => {
@@ -93,55 +106,52 @@ fn main() {
         Err(_) => Vec::new(),
     };
 
-    let mut pic_id_list = data.iter()
-        .map(|p| &p.id)
-        .chain(old_pic.iter())
-        .collect::<Vec<_>>();
-    pic_id_list.sort(); // sort for more efficient deduplication
-    pic_id_list.dedup();
-    if pic_id_list.len() > 100 {
-        pic_id_list.reverse();
-        pic_id_list.truncate(100);
-        pic_id_list.reverse();
-    }
+    let r = data.filter(|pic| !old_pic.contains(&pic.id))
+        .and_then(|pic| {
+            let spider::Pic {
+                author,
+                link,
+                id,
+                oo,
+                xx,
+                text,
+                images,
+                comments,
+            } = pic;
+            let imgs = futures::stream::iter(images.into_iter().map(Ok))
+                .and_then(|img| bot.message(channel_id, img).send());
 
+            let mut msg = format!("*{}*: {}\n{}*OO*: {} *XX*: {}",
+                                  &author.replace("*", ""),
+                                  &link,
+                                  telegram_md_escape(&text),
+                                  oo,
+                                  xx);
+            for comment in &comments {
+                msg.push_str(&format!("\n*{}*: {}\n*OO*: {}, *XX*: {}",
+                                     &comment.author.replace("*", ""),
+                                     telegram_md_escape(&comment.content),
+                                     comment.oo,
+                                     comment.xx));
+            }
+
+            imgs.for_each(|_| Ok(()))
+                .and_then(|_| {
+                              bot.message(channel_id, msg)
+                                  .parse_mode("Markdown")
+                                  .disable_web_page_preview(true)
+                                  .send()
+                          })
+                .map_err(|e| format!("Telegram: {:?}", e).into())
+                .map(move |_| id)
+        })
+        .collect();
+    let new_pic = lp.run(r).unwrap();
     let mut file = File::create("old_pic.list").unwrap();
-    serde_json::to_writer(&mut file, &pic_id_list).unwrap();
-
-    let mut msgs = Vec::new();
-
-    for pic in &data {
-        if old_pic.contains(&pic.id) {
-            continue;
-        }
-
-        for img in &pic.images {
-            msgs.push(bot.message(channel_id, img.to_owned()));
-        }
-        let mut msg = format!("*{}*: {}\n{}*OO*: {} *XX*: {}",
-                              &pic.author.replace("*", ""),
-                              &pic.link,
-                              telegram_md_escape(&pic.text),
-                              pic.oo,
-                              pic.xx);
-        for comment in &pic.comments {
-            msg.push_str(&format!("\n*{}*: {}\n*OO*: {}, *XX*: {}",
-                                 &comment.author.replace("*", ""),
-                                 telegram_md_escape(&comment.content),
-                                 comment.oo,
-                                 comment.xx));
-        }
-
-        msgs.push(bot.message(channel_id, msg)
-                      .parse_mode("Markdown")
-                      .disable_web_page_preview(true));
-    }
-
-    let mut future = futures::future::ok(()).boxed() as
-                     Box<Future<Item = (), Error = telebot::Error>>;
-    for msg in msgs {
-        future = Box::new(future.and_then(|_| msg.send().and_then(|_| Ok(())))) as
-                 Box<Future<Item = (), Error = telebot::Error>>
-    }
-    lp.run(future).unwrap();
+    let id_list = new_pic
+        .iter()
+        .chain(old_pic.iter())
+        .take(100)
+        .collect::<Vec<&String>>();
+    serde_json::to_writer(&mut file, &id_list).unwrap();
 }

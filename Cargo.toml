@@ -7,6 +7,7 @@ authors = ["iovxw <iovxw@outlook.com>"]
 error-chain = "0.7"
 regex = "0.1"
 curl = "0.4"
+tokio-curl = "0.1"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"
