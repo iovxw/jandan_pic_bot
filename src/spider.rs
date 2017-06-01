@@ -61,11 +61,12 @@ struct Tucao {
     is_jandan_user: i64,
 }
 
-fn escape_comment_content(s: String) -> String {
+fn escape_comment_content(s: &str) -> String {
     Regex::new(r"<a[^>]*>(?P<at>[^<]*)</a>")
         .unwrap()
-        .replace_all(&s, "$at")
+        .replace_all(s, "$at")
         .replace("<br />\n", "\n")
+        .replace("&quot", "\"")
 }
 
 fn fix_scheme(s: String) -> String {
@@ -84,7 +85,7 @@ fn make_request(url: &str) -> Result<(Easy, Arc<Mutex<Vec<u8>>>)> {
     let buf2 = buf.clone();
 
     let mut client = Easy::new();
-    client.url(&url).unwrap();
+    client.url(url).unwrap();
     client.timeout(Duration::from_secs(10)).unwrap();
     client.follow_location(true).unwrap();
     client
@@ -97,7 +98,7 @@ fn make_request(url: &str) -> Result<(Easy, Arc<Mutex<Vec<u8>>>)> {
     Ok((client, buf))
 }
 
-pub fn get_comments<'a>(session: Session,
+pub fn get_comments<'a>(session: &Session,
                         id: &str)
                         -> impl Future<Item = Vec<Comment>, Error = Error> + 'a {
     let url = format!("{}{}", TUCAO_API, id);
@@ -120,7 +121,7 @@ pub fn get_comments<'a>(session: Session,
                                         author: tucao.comment_author,
                                         oo: tucao.vote_positive.parse()?,
                                         xx: tucao.vote_negative.parse()?,
-                                        content: escape_comment_content(tucao.comment_content),
+                                        content: escape_comment_content(&tucao.comment_content),
                                     })
                              })
                         .collect::<Result<_>>()
@@ -211,7 +212,7 @@ pub fn get_list(session: Session) -> Box<Stream<Item = Pic, Error = Error>> {
                                 return Some(Err(e.into()));
                             }
                             let src = src.unwrap();
-                            let name = image_name(&src);
+                            let name = image_name(src);
                             if prev_name != name {
                                 prev_name.clear();
                                 prev_name.push_str(name);
@@ -258,8 +259,7 @@ pub fn get_list(session: Session) -> Box<Stream<Item = Pic, Error = Error>> {
         .map(move |index| {
             futures::stream::iter(index.into_iter().map(Ok))
                 .and_then(move |(author, link, id, oo, xx, text, images)| {
-                    let session = session.clone();
-                    get_comments(session, &id).map(move |comments| {
+                    get_comments(&session, &id).map(move |comments| {
                         Pic {
                             author,
                             link,
