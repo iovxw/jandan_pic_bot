@@ -62,11 +62,20 @@ struct Tucao {
 }
 
 fn escape_comment_content(s: &str) -> String {
-    Regex::new(r"<a[^>]*>(?P<at>[^<]*)</a>")
-        .unwrap()
-        .replace_all(s, "$at")
-        .replace("<br />\n", "\n")
-        .replace("&quot", "\"")
+    lazy_static!{
+        static ref IMG: Regex =
+            Regex::new(r#"<a href="(:?http|https:)?(?P<img>//[^"]*)"[^>]*>[^<]*</a><br><img[^>]*>"#)
+            .unwrap();
+        static ref AT: Regex = Regex::new(r#"<a[^>]*>(?P<at>[^<]*)</a>"#).unwrap();
+    }
+    let s = IMG.replace_all(s, "https:$img");
+    let s = AT.replace_all(&s, "$at");
+
+    s.replace("<br />\n", "\n")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
 }
 
 fn fix_scheme(s: String) -> String {
