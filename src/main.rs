@@ -19,6 +19,8 @@ extern crate lazy_static;
 mod errors;
 mod spider;
 
+use errors::*;
+
 use std::fs::File;
 use std::time::Duration;
 
@@ -76,13 +78,13 @@ fn telegram_md_escape(s: &str) -> String {
         .replace("`", "\\`")
 }
 
-fn main() {
+fn run() -> Result<()> {
     let token = std::env::args()
         .nth(1)
-        .expect("Need a Telegram bot token as argument");
+        .ok_or("Need a Telegram bot token as argument")?;
     let channel_id = std::env::args()
         .nth(2)
-        .expect("Please specify a Telegram Channel");
+        .ok_or("Please specify a Telegram Channel")?;
 
     let mut lp = Core::new().unwrap();
 
@@ -96,17 +98,13 @@ fn main() {
 
     let data = spider::get_list(session);
 
-    let old_pic = match File::open("old_pic.list") {
-        Ok(file) => {
-            let l: serde_json::Value = serde_json::from_reader(file).unwrap();
-            l.as_array()
-                .unwrap()
-                .iter()
-                .map(|s| s.as_str().unwrap().to_string())
-                .collect()
-        }
-        Err(_) => Vec::new(),
-    };
+    let old_pic = File::open("old_pic.list")
+        .chain_err(|| "failed to open old_pic.list")
+        .and_then(|file| {
+                      serde_json::from_reader::<_, Vec<String>>(file)
+                          .chain_err(|| "illegal data format in old_pic.list")
+                  })
+        .unwrap_or_default();
 
     let r = data.filter(|pic| !old_pic.contains(&pic.id))
         .and_then(|pic| {
@@ -148,12 +146,15 @@ fn main() {
                 .map(move |_| id)
         })
         .collect();
-    let new_pic = lp.run(r).unwrap();
-    let mut file = File::create("old_pic.list").unwrap();
+    let new_pic = lp.run(r)?;
+    let mut file = File::create("old_pic.list")
+        .chain_err(|| "failed to create old_pic.list")?;
     let id_list = new_pic
         .iter()
         .chain(old_pic.iter())
         .take(100)
         .collect::<Vec<&String>>();
-    serde_json::to_writer(&mut file, &id_list).unwrap();
+    serde_json::to_writer(&mut file, &id_list).chain_err(|| "failed to save data to old_pic.list")
 }
+
+quick_main!(run);
