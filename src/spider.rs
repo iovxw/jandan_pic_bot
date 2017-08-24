@@ -99,43 +99,43 @@ fn make_request(url: &str) -> Result<(Easy, Arc<Mutex<Vec<u8>>>)> {
     client.follow_location(true).unwrap();
     client
         .write_function(move |data| {
-                            buf2.lock().unwrap().extend_from_slice(data);
-                            Ok(data.len())
-                        })
+            buf2.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        })
         .unwrap();
 
     Ok((client, buf))
 }
 
-pub fn get_comments<'a>(session: &Session,
-                        id: &str)
-                        -> impl Future<Item = Vec<Comment>, Error = Error> + 'a {
+pub fn get_comments<'a>(
+    session: &Session,
+    id: &str,
+) -> impl Future<Item = Vec<Comment>, Error = Error> + 'a {
     let url = format!("{}{}", TUCAO_API, id);
 
     let (request, body) = make_request(&url).unwrap();
 
     let req = session.perform(request);
 
-    req.map_err(|e| e.into())
-        .and_then(move |_| {
-            let body = body.lock().unwrap();
-            serde_json::from_slice::<TucaoResp>(&body)
-                .map_err(|e| e.into())
-                .and_then(|resp| {
-                    assert_eq!(resp.code, 0);
-                    resp.hot_tucao
-                        .into_iter()
-                        .map(|tucao| {
-                                 Ok(Comment {
-                                        author: tucao.comment_author,
-                                        oo: tucao.vote_positive.parse()?,
-                                        xx: tucao.vote_negative.parse()?,
-                                        content: escape_comment_content(&tucao.comment_content),
-                                    })
-                             })
-                        .collect::<Result<_>>()
-                })
-        })
+    req.map_err(|e| e.into()).and_then(move |_| {
+        let body = body.lock().unwrap();
+        serde_json::from_slice::<TucaoResp>(&body)
+            .map_err(|e| e.into())
+            .and_then(|resp| {
+                assert_eq!(resp.code, 0);
+                resp.hot_tucao
+                    .into_iter()
+                    .map(|tucao| {
+                        Ok(Comment {
+                            author: tucao.comment_author,
+                            oo: tucao.vote_positive.parse()?,
+                            xx: tucao.vote_negative.parse()?,
+                            content: escape_comment_content(&tucao.comment_content),
+                        })
+                    })
+                    .collect::<Result<_>>()
+            })
+    })
 }
 
 #[inline]
@@ -143,7 +143,7 @@ fn image_name(link: &str) -> &str {
     link.split('/').last().unwrap_or("")
 }
 
-pub fn get_list(session: Session) -> Box<Stream<Item = Pic, Error = Error>> {
+pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> + 'a {
     let (request, body) = make_request(JANDAN_HOME).unwrap();
 
     let req = session.perform(request);
@@ -156,7 +156,9 @@ pub fn get_list(session: Session) -> Box<Stream<Item = Pic, Error = Error>> {
             let document = kuchiki::parse_html().one(&*html);
 
             document
-                .select("#list-pic .acv_author, #list-pic .acv_comment, #list-pic .jandan-vote")
+                .select(
+                    "#list-pic .acv_author, #list-pic .acv_comment, #list-pic .jandan-vote",
+                )
                 .unwrap()
                 .collect::<Vec<_>>()
                 .chunks(3)
@@ -177,11 +179,9 @@ pub fn get_list(session: Session) -> Box<Stream<Item = Pic, Error = Error>> {
                         .trim()
                         .to_owned();
 
-                    let link_raw = acv_author
-                        .select("a[href]")
-                        .map_err(|_| "")?
-                        .next()
-                        .ok_or("no \"a[href]\" in \".acv_author\"")?;
+                    let link_raw = acv_author.select("a[href]").map_err(|_| "")?.next().ok_or(
+                        "no \"a[href]\" in \".acv_author\"",
+                    )?;
                     let link = link_raw
                         .as_node()
                         .as_element()
@@ -236,9 +236,9 @@ pub fn get_list(session: Session) -> Box<Stream<Item = Pic, Error = Error>> {
                         .select("span")
                         .unwrap()
                         .filter_map(|x| {
-                            x.as_node()
-                                .first_child()
-                                .and_then(|x| x.as_text().map(|x| x.borrow().parse().unwrap_or(0)))
+                            x.as_node().first_child().and_then(|x| {
+                                x.as_text().map(|x| x.borrow().parse().unwrap_or(0))
+                            })
                         })
                         .collect::<Vec<u32>>();
 
@@ -266,8 +266,8 @@ pub fn get_list(session: Session) -> Box<Stream<Item = Pic, Error = Error>> {
                 .collect::<Result<Vec<_>>>()
         })
         .map(move |index| {
-            futures::stream::iter(index.into_iter().map(Ok))
-                .and_then(move |(author, link, id, oo, xx, text, images)| {
+            futures::stream::iter(index.into_iter().map(Ok)).and_then(
+                move |(author, link, id, oo, xx, text, images)| {
                     get_comments(&session, &id).map(move |comments| {
                         Pic {
                             author,
@@ -280,8 +280,8 @@ pub fn get_list(session: Session) -> Box<Stream<Item = Pic, Error = Error>> {
                             comments,
                         }
                     })
-                })
+                },
+            )
         })
         .flatten_stream()
-        .boxed()
 }
