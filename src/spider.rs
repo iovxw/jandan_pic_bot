@@ -266,22 +266,26 @@ pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> 
                 .collect::<Result<Vec<_>>>()
         })
         .map(move |index| {
-            futures::stream::iter(index.into_iter().map(Ok)).and_then(
-                move |(author, link, id, oo, xx, text, images)| {
-                    get_comments(&session, &id).map(move |comments| {
-                        Pic {
-                            author,
-                            link,
-                            id,
-                            oo,
-                            xx,
-                            text,
-                            images,
-                            comments,
-                        }
-                    })
-                },
-            )
+            futures::stream::iter_ok(index).and_then(move |(author,
+                   link,
+                   id,
+                   oo,
+                   xx,
+                   text,
+                   images)| {
+                get_comments(&session, &id).map(move |comments| {
+                    Pic {
+                        author,
+                        link,
+                        id,
+                        oo,
+                        xx,
+                        text,
+                        images,
+                        comments,
+                    }
+                })
+            })
         })
         .flatten_stream()
 }

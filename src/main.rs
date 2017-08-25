@@ -122,11 +122,9 @@ fn run() -> Result<()> {
                 images,
                 comments,
             } = pic;
-            let imgs = futures::stream::iter(images.into_iter().map(Ok)).and_then(
-                |img| {
-                    bot.message(channel_id, img).send()
-                },
-            );
+            let imgs = futures::stream::iter_ok(images).and_then(|img| {
+                bot.message(channel_id, img).send()
+            });
 
             let mut msg = format!(
                 "*{}*: {}\n{}*OO*: {} *XX*: {}",
