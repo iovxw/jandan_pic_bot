@@ -1,8 +1,8 @@
-#![feature(conservative_impl_trait)]
+#![feature(proc_macro, conservative_impl_trait, generators)]
 
 extern crate curl;
+extern crate futures_await as futures;
 extern crate tokio_curl;
-extern crate futures;
 extern crate tokio_core;
 extern crate telebot;
 #[macro_use]
@@ -22,9 +22,11 @@ use errors::*;
 
 use std::fs::File;
 use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::io::Cursor;
 
 use curl::easy::Easy;
-use futures::{Future, Stream};
+use futures::prelude::*;
 use tokio_curl::Session;
 use tokio_core::reactor::Core;
 use telebot::bot;
@@ -81,6 +83,31 @@ fn telegram_md_escape(s: &str) -> String {
         .replace("`", "\\`")
 }
 
+// TODO: code reuse
+fn download_file(
+    session: Session,
+    url: &str,
+) -> impl Future<Item = Vec<u8>, Error = tokio_curl::PerformError> {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+
+    let mut req = Easy::new();
+    req.url(url).unwrap();
+    req.timeout(Duration::from_secs(10)).unwrap();
+    req.follow_location(true).unwrap();
+    {
+        let buf = buf.clone();
+        req.write_function(move |data| {
+            buf.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }).unwrap();
+    }
+    session.perform(req).map(|mut resp| {
+        assert_eq!(resp.response_code().unwrap(), 200);
+        std::mem::drop(resp);
+        Arc::try_unwrap(buf).unwrap().into_inner().unwrap()
+    })
+}
+
 fn run() -> Result<()> {
     let token = std::env::args().nth(1).ok_or(
         "Need a Telegram bot token as argument",
@@ -110,8 +137,11 @@ fn run() -> Result<()> {
         })
         .unwrap_or_default();
 
+    let handle = lp.handle();
     let r = data.filter(|pic| !old_pic.contains(&pic.id))
-        .and_then(|pic| {
+        .and_then(move |pic| {
+            let handle = handle.clone();
+            let bot = bot.clone();
             let spider::Pic {
                 author,
                 link,
@@ -122,9 +152,24 @@ fn run() -> Result<()> {
                 images,
                 comments,
             } = pic;
-            let imgs = futures::stream::iter_ok(images).and_then(|img| {
-                bot.message(channel_id, img).send()
-            });
+            let bot2 = bot.clone();
+            let imgs =
+                async_block! {
+                    for img in images {
+                        if img.ends_with(".gif") {
+                            let r = await!(bot.document(channel_id).url(img.clone()).send());
+                            if r.is_err() {
+                                let session = Session::new(handle.clone());
+                                let buf = await!(download_file(session, &img)).unwrap();
+                                let mut read = Cursor::new(buf);
+                                await!(bot.document(channel_id).file((img.as_str(), read)).send())?;
+                            }
+                        } else {
+                            await!(bot.message(channel_id, img).send())?;
+                        }
+                    }
+                    Ok(())
+                };
 
             let mut msg = format!(
                 "*{}*: {}\n{}*OO*: {} *XX*: {}",
@@ -144,14 +189,12 @@ fn run() -> Result<()> {
                 ));
             }
 
-            imgs.for_each(|_| Ok(()))
-                .and_then(|_| {
-                    bot.message(channel_id, msg)
-                        .parse_mode("Markdown")
-                        .disable_web_page_preview(true)
-                        .send()
-                })
-                .map_err(|e| format!("Telegram: {:?}", e).into())
+            imgs.and_then(move |_| {
+                bot2.message(channel_id, msg)
+                    .parse_mode("Markdown")
+                    .disable_web_page_preview(true)
+                    .send()
+            }).map_err(|e| format!("Telegram: {:?}", e).into())
                 .map(move |_| id)
         })
         .collect();
