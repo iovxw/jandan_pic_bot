@@ -91,7 +91,7 @@ fn fix_scheme(s: String) -> String {
 
 fn make_request(url: &str) -> Result<(Easy, Arc<Mutex<Vec<u8>>>)> {
     let buf = Arc::new(Mutex::new(Vec::new()));
-    let buf2 = buf.clone();
+    let buf2 = Arc::clone(&buf);
 
     let mut client = Easy::new();
     client.url(url).unwrap();

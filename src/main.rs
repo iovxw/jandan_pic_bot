@@ -85,7 +85,7 @@ fn telegram_md_escape(s: &str) -> String {
 
 // TODO: code reuse
 fn download_file(
-    session: Session,
+    session: &Session,
     url: &str,
 ) -> impl Future<Item = Vec<u8>, Error = tokio_curl::PerformError> {
     let buf = Arc::new(Mutex::new(Vec::new()));
@@ -95,7 +95,7 @@ fn download_file(
     req.timeout(Duration::from_secs(10)).unwrap();
     req.follow_location(true).unwrap();
     {
-        let buf = buf.clone();
+        let buf = Arc::clone(&buf);
         req.write_function(move |data| {
             buf.lock().unwrap().extend_from_slice(data);
             Ok(data.len())
@@ -160,8 +160,8 @@ fn run() -> Result<()> {
                             let r = await!(bot.document(channel_id).url(img.clone()).send());
                             if r.is_err() {
                                 let session = Session::new(handle.clone());
-                                let buf = await!(download_file(session, &img)).unwrap();
-                                let mut read = Cursor::new(buf);
+                                let buf = await!(download_file(&session, &img)).unwrap();
+                                let read = Cursor::new(buf);
                                 await!(bot.document(channel_id).file((img.as_str(), read)).send())?;
                             }
                         } else {
