@@ -103,6 +103,14 @@ fn make_request(url: &str) -> Result<(Easy, Arc<Mutex<Vec<u8>>>)> {
             Ok(data.len())
         })
         .unwrap();
+    client
+        .useragent(concat!(
+            env!("CARGO_PKG_NAME"),
+            "/",
+            env!("CARGO_PKG_VERSION"),
+            " (+https://t.me/jandan_pic)"
+        ))
+        .unwrap();
 
     Ok((client, buf))
 }
@@ -117,7 +125,8 @@ pub fn get_comments<'a>(
 
     let req = session.perform(request);
 
-    req.map_err(|e| e.into()).and_then(move |_| {
+    req.map_err(|e| e.into()).and_then(move |mut resp| {
+        assert_eq!(resp.response_code().unwrap(), 200);
         let body = body.lock().unwrap();
         serde_json::from_slice::<TucaoResp>(&body)
             .map_err(|e| e.into())
@@ -149,7 +158,8 @@ pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> 
     let req = session.perform(request);
 
     req.map_err(|e| e.into())
-        .and_then(move |_| {
+        .and_then(move |mut resp| {
+            assert_eq!(resp.response_code().unwrap(), 200);
             let body = body.lock().unwrap();
             let html = String::from_utf8_lossy(&body);
 
