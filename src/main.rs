@@ -14,6 +14,7 @@ extern crate serde_derive;
 extern crate serde_json;
 #[macro_use]
 extern crate lazy_static;
+extern crate image;
 
 mod errors;
 mod spider;
@@ -31,6 +32,9 @@ use tokio_curl::Session;
 use tokio_core::reactor::Core;
 use telebot::bot;
 use telebot::functions::*;
+use image::GenericImage;
+
+const TG_IMAGE_SIZE_LIMIT: u32 = 1280;
 
 fn channel_id_to_int(bot_token: &str, id: &str) -> i64 {
     if !id.starts_with('@') {
@@ -108,6 +112,54 @@ fn download_file(
     })
 }
 
+// A dirty fix
+#[allow(unknown_lints, needless_pass_by_value)]
+fn fix_telebot_err(e: telebot::Error) -> Error {
+    format!("Telegram: {:?}", e).into()
+}
+
+#[async]
+fn send_image_to(
+    bot: bot::RcBot,
+    channel_id: i64,
+    session: Session,
+    images: Vec<String>,
+) -> Result<()> {
+    for img_link in images {
+        let data = await!(download_file(&session, &img_link)).chain_err(
+            || "failed to download image",
+        )?;
+        let img_type = image::guess_format(&data).chain_err(
+            || "unknown image format",
+        )?;
+        let img = image::load_from_memory_with_format(&data, img_type)
+            .chain_err(|| "failed to decode image")?;
+        if std::cmp::max(img.width(), img.height()) > TG_IMAGE_SIZE_LIMIT {
+            await!(bot.message(channel_id, img_link).send()).map_err(
+                fix_telebot_err,
+            )?;
+        } else if let image::GIF = img_type {
+            let send_by_link = await!(bot.document(channel_id).url(img_link.as_str()).send());
+            if send_by_link.is_err() {
+                let read = Cursor::new(data);
+                let send_by_file = bot.document(channel_id)
+                    .file((img_link.as_str(), read))
+                    .send();
+                await!(send_by_file).map_err(fix_telebot_err)?;
+            }
+        } else {
+            let send_by_link = await!(bot.photo(channel_id).url(img_link.as_str()).send());
+            if send_by_link.is_err() {
+                let read = Cursor::new(data);
+                let send_by_file = bot.photo(channel_id).file((img_link.as_str(), read)).send();
+                await!(send_by_file).map_err(fix_telebot_err)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+// FIXME: Everything is just work
 fn run() -> Result<()> {
     let token = std::env::args().nth(1).ok_or(
         "Need a Telegram bot token as argument",
@@ -153,23 +205,8 @@ fn run() -> Result<()> {
                 comments,
             } = pic;
             let bot2 = bot.clone();
-            let imgs =
-                async_block! {
-                    for img in images {
-                        if img.ends_with(".gif") {
-                            let r = await!(bot.document(channel_id).url(img.clone()).send());
-                            if r.is_err() {
-                                let session = Session::new(handle.clone());
-                                let buf = await!(download_file(&session, &img)).unwrap();
-                                let read = Cursor::new(buf);
-                                await!(bot.document(channel_id).file((img.as_str(), read)).send())?;
-                            }
-                        } else {
-                            await!(bot.message(channel_id, img).send())?;
-                        }
-                    }
-                    Ok(())
-                };
+            let session = Session::new(handle.clone());
+            let imgs = send_image_to(bot.clone(), channel_id, session, images);
 
             let mut msg = format!(
                 "*{}*: {}\n{}*OO*: {} *XX*: {}",
@@ -194,8 +231,8 @@ fn run() -> Result<()> {
                     .parse_mode("Markdown")
                     .disable_web_page_preview(true)
                     .send()
-            }).map_err(|e| format!("Telegram: {:?}", e).into())
-                .map(move |_| id)
+                    .map_err(fix_telebot_err)
+            }).map(move |_| id)
         })
         .collect();
     let new_pic = lp.run(r)?;
