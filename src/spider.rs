@@ -1,5 +1,6 @@
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
+use std::borrow::Cow;
 
 use regex::Regex;
 use curl::easy::Easy;
@@ -8,11 +9,15 @@ use serde_json;
 use kuchiki;
 use kuchiki::traits::*;
 use futures::{self, Future, Stream};
+use md5;
+use base64;
+use array_macro::array;
 
 use errors::*;
 
-const JANDAN_HOME: &'static str = "http://jandan.net/";
-const TUCAO_API: &'static str = "http://jandan.net/tucao/";
+const JANDAN_HOME: &str = "http://jandan.net/";
+const TUCAO_API: &str = "http://jandan.net/tucao/";
+const KEY: &str = "RGgt39TfWASbBANH0Yh7Wa6u4Cg93uMV";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
@@ -78,14 +83,14 @@ fn escape_comment_content(s: &str) -> String {
         .replace("&gt;", ">")
 }
 
-fn fix_scheme(s: String) -> String {
+fn fix_scheme(s: &str) -> Cow<str> {
     if s.starts_with("//") {
         let mut ns = String::with_capacity(6 + s.len());
         ns.push_str("https:");
         ns.push_str(&s);
-        ns
+        Cow::Owned(ns)
     } else {
-        s
+        Cow::Borrowed(s)
     }
 }
 
@@ -95,7 +100,7 @@ fn make_request(url: &str) -> Result<(Easy, Arc<Mutex<Vec<u8>>>)> {
 
     let mut client = Easy::new();
     client.url(url).unwrap();
-    client.timeout(Duration::from_secs(10)).unwrap();
+    client.timeout(Duration::from_secs(60)).unwrap();
     client.follow_location(true).unwrap();
     client
         .write_function(move |data| {
@@ -145,11 +150,6 @@ pub fn get_comments<'a>(
                     .collect::<Result<_>>()
             })
     })
-}
-
-#[inline]
-fn image_name(link: &str) -> &str {
-    link.split('/').last().unwrap_or("")
 }
 
 pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> + 'a {
@@ -216,31 +216,20 @@ pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> 
                         }
                     }
 
-                    let mut prev_name = String::new();
                     let images = acv_comment
-                        .select("a.view_img_link[href], img[org_src], img[src]")
+                        .select(".img-hash")
                         .unwrap()
-                        .filter_map(|img| {
-                            let attrs = img.as_node().as_element().unwrap().attributes.borrow();
-                            let src = attrs
-                                .get("href")
-                                .or_else(|| attrs.get("org_src"))
-                                .or_else(|| attrs.get("src"))
-                                .ok_or("no org_src or src in \".acv_comment img\"");
-                            if let Err(e) = src {
-                                return Some(Err(e.into()));
-                            }
-                            let src = src.unwrap();
-                            let name = image_name(src);
-                            if prev_name != name {
-                                prev_name.clear();
-                                prev_name.push_str(name);
-                                Some(Ok(fix_scheme(src.to_owned())))
-                            } else {
-                                None
-                            }
+                        .map(|e| {
+                            let text = e.as_node().children().next().expect(
+                                ".img-hash text is empty",
+                            );
+                            let hash = text.as_text().expect(
+                                ".img-hash first children is not text",
+                            );
+                            let src = decode_img_src(hash.borrow().as_bytes(), KEY.as_bytes());
+                            fix_scheme(&to_large_img(&src)).to_string()
                         })
-                        .collect::<Result<Vec<_>>>()?;
+                        .collect::<Vec<_>>();
 
                     let vote = jandan_vote
                         .select("span")
@@ -298,4 +287,64 @@ pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> 
             })
         })
         .flatten_stream()
+}
+
+fn decode_img_src(hash: &[u8], key: &[u8]) -> String {
+    let mut key = js_md5(&js_md5(key).as_bytes()[..16]);
+    let tail = js_md5(
+        (key.clone() + &String::from_utf8_lossy(&hash[..4])).as_bytes(),
+    );
+    key.push_str(&tail);
+    let mut h = array![|x| x as u8; 256];
+    let mut o = 0;
+    for i in 0..256 {
+        o = (o + h[i] as usize + key.as_bytes()[i % key.len()] as usize) % 256;
+        h.swap(i, o);
+    }
+    let mut r = String::with_capacity(64);
+    let data = base64::decode(&hash[4..]).expect("decode img src failed");
+    let mut v = 0;
+    let mut o = 0;
+    for c in data {
+        v = (v + 1) % 256;
+        o = (o + h[v] as usize) % 256;
+        h.swap(v, o);
+        let c = (c ^ (h[(h[v] as usize + h[o] as usize) % 256])) as char;
+        r.push(c);
+    }
+    r.split_off(26)
+}
+
+fn js_md5(src: &[u8]) -> String {
+    format!("{:x}", md5::compute(src))
+}
+
+fn to_large_img(src: &str) -> Cow<str> {
+    lazy_static! {
+        static ref SIZE: Regex = Regex::new(r"(//wx[0-9]+.sinaimg.cn/)[^/]+(/.+)").unwrap();
+    }
+    SIZE.replace(&src, "${1}large${2}")
+}
+
+#[test]
+fn test_decode_img_src() {
+    let hash = "fe14TW6+e8Z88GLu/NAsNlfxPFbpWZonPoYSO1iY2i6EYcjADm2ZD/0/C8YWZSF4/\
+                DmLXmBjEqUJFhvzyUELdF/VOsqxqfMnk1d1GJn2EYm/Pd3kkWU72g";
+    let key = "RGgt39TfWASbBANH0Yh7Wa6u4Cg93uMV";
+    let r = decode_img_src(hash.as_bytes(), key.as_bytes());
+    assert_eq!(
+        r,
+        "//wx1.sinaimg.cn/mw600/93c0135dgy1fgjp10foprj20ti09b75u.jpg"
+    );
+}
+
+#[test]
+fn test_to_large_img() {
+    let r = to_large_img(
+        "//wx1.sinaimg.cn/mw600/93c0135dgy1fgjp10foprj20ti09b75u.jpg",
+    );
+    assert_eq!(
+        r,
+        "//wx1.sinaimg.cn/large/93c0135dgy1fgjp10foprj20ti09b75u.jpg"
+    );
 }

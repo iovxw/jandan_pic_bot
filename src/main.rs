@@ -15,6 +15,9 @@ extern crate serde_json;
 #[macro_use]
 extern crate lazy_static;
 extern crate image;
+extern crate base64;
+extern crate md5;
+extern crate array_macro;
 
 mod errors;
 mod spider;
@@ -132,8 +135,14 @@ fn send_image_to(
         let img_type = image::guess_format(&data).chain_err(
             || "unknown image format",
         )?;
-        let img = image::load_from_memory_with_format(&data, img_type)
-            .chain_err(|| "failed to decode image")?;
+        let img = image::load_from_memory_with_format(&data, img_type);
+        if img.is_err() {
+            await!(bot.message(channel_id, img_link).send()).map_err(
+                fix_telebot_err,
+            )?;
+            continue;
+        }
+        let img = img.unwrap();
         if std::cmp::max(img.width(), img.height()) > TG_IMAGE_SIZE_LIMIT {
             await!(bot.message(channel_id, img_link).send()).map_err(
                 fix_telebot_err,
