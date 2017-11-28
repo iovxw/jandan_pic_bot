@@ -99,7 +99,7 @@ fn download_file(
 
     let mut req = Easy::new();
     req.url(url).unwrap();
-    req.timeout(Duration::from_secs(10)).unwrap();
+    req.timeout(Duration::from_secs(60)).unwrap();
     req.follow_location(true).unwrap();
     {
         let buf = Arc::clone(&buf);
