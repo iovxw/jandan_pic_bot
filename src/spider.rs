@@ -17,7 +17,6 @@ use errors::*;
 
 const JANDAN_HOME: &str = "http://jandan.net/";
 const TUCAO_API: &str = "http://jandan.net/tucao/";
-const KEY: &str = "RGgt39TfWASbBANH0Yh7Wa6u4Cg93uMV";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
@@ -152,7 +151,7 @@ pub fn get_comments<'a>(
     })
 }
 
-pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> + 'a {
+pub fn get_list<'a>(session: Session, key: &'a str) -> impl Stream<Item = Pic, Error = Error> + 'a {
     let (request, body) = make_request(JANDAN_HOME).unwrap();
 
     let req = session.perform(request);
@@ -226,7 +225,7 @@ pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> 
                             let hash = text.as_text().expect(
                                 ".img-hash first children is not text",
                             );
-                            let src = decode_img_src(hash.borrow().as_bytes(), KEY.as_bytes());
+                            let src = decode_img_src(hash.borrow().as_bytes(), key.as_bytes());
                             fix_scheme(&to_large_img(&src)).to_string()
                         })
                         .collect::<Vec<_>>();

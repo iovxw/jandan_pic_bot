@@ -176,6 +176,7 @@ fn run() -> Result<()> {
     let channel_id = std::env::args().nth(2).ok_or(
         "Please specify a Telegram Channel",
     )?;
+    let jandan_key = std::env::args().nth(3).ok_or("")?;
 
     let mut lp = Core::new().unwrap();
 
@@ -187,7 +188,7 @@ fn run() -> Result<()> {
 
     let session = Session::new(lp.handle());
 
-    let data = spider::get_list(session);
+    let data = spider::get_list(session, &jandan_key);
 
     let old_pic = File::open("old_pic.list")
         .chain_err(|| "failed to open old_pic.list")
