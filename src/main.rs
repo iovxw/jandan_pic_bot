@@ -135,33 +135,37 @@ fn send_image_to(
         let img_type = image::guess_format(&data).chain_err(
             || "unknown image format",
         )?;
+        let send_link = bot.message(channel_id, img_link.clone());
         let img = image::load_from_memory_with_format(&data, img_type);
         if img.is_err() {
-            await!(bot.message(channel_id, img_link).send()).map_err(
-                fix_telebot_err,
-            )?;
+            await!(send_link.send().map_err(fix_telebot_err))?;
             continue;
         }
         let img = img.unwrap();
         if std::cmp::max(img.width(), img.height()) > TG_IMAGE_SIZE_LIMIT {
-            await!(bot.message(channel_id, img_link).send()).map_err(
-                fix_telebot_err,
-            )?;
+            await!(send_link.send().map_err(fix_telebot_err))?;
         } else if let image::GIF = img_type {
             let send_by_link = await!(bot.document(channel_id).url(img_link.as_str()).send());
             if send_by_link.is_err() {
                 let read = Cursor::new(data);
-                let send_by_file = bot.document(channel_id)
-                    .file((img_link.as_str(), read))
-                    .send();
-                await!(send_by_file).map_err(fix_telebot_err)?;
+                let send_by_file = await!(
+                    bot.document(channel_id)
+                        .file((img_link.as_str(), read))
+                        .send()
+                );
+                if send_by_file.is_err() {
+                    await!(send_link.send().map_err(fix_telebot_err))?;
+                }
             }
         } else {
             let send_by_link = await!(bot.photo(channel_id).url(img_link.as_str()).send());
             if send_by_link.is_err() {
                 let read = Cursor::new(data);
-                let send_by_file = bot.photo(channel_id).file((img_link.as_str(), read)).send();
-                await!(send_by_file).map_err(fix_telebot_err)?;
+                let send_by_file =
+                    await!(bot.photo(channel_id).file((img_link.as_str(), read)).send());
+                if send_by_file.is_err() {
+                    await!(send_link.send().map_err(fix_telebot_err))?;
+                }
             }
         }
     }
