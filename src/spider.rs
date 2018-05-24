@@ -2,13 +2,11 @@ use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use array_macro::array;
 use base64;
 use curl::easy::Easy;
 use futures::{self, Future, Stream};
 use kuchiki;
 use kuchiki::traits::*;
-use md5;
 use regex::Regex;
 use serde_json;
 use tokio_curl::Session;
@@ -151,7 +149,7 @@ pub fn get_comments<'a>(
     })
 }
 
-pub fn get_list<'a>(session: Session, key: &'a str) -> impl Stream<Item = Pic, Error = Error> + 'a {
+pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> + 'a {
     let (request, body) = make_request(JANDAN_HOME).unwrap();
 
     let req = session.perform(request);
@@ -223,9 +221,12 @@ pub fn get_list<'a>(session: Session, key: &'a str) -> impl Stream<Item = Pic, E
                                 .children()
                                 .next()
                                 .expect(".img-hash text is empty");
-                            let hash = text.as_text()
+                            let raw_src = text.as_text()
                                 .expect(".img-hash first children is not text");
-                            let src = decode_img_src(hash.borrow().as_bytes(), key.as_bytes());
+
+                            let src = String::from_utf8(
+                                base64::decode(&*raw_src.borrow()).expect("base64 decode"),
+                            ).expect("utf8 decode");
                             fix_scheme(&to_large_img(&src)).to_string()
                         })
                         .collect::<Vec<_>>();
@@ -282,51 +283,12 @@ pub fn get_list<'a>(session: Session, key: &'a str) -> impl Stream<Item = Pic, E
         .flatten_stream()
 }
 
-fn decode_img_src(hash: &[u8], key: &[u8]) -> String {
-    let mut key = js_md5(&js_md5(key).as_bytes()[..16]);
-    let tail = js_md5((key.clone() + &String::from_utf8_lossy(&hash[..4])).as_bytes());
-    key.push_str(&tail);
-    let mut h = array![|x| x as u8; 256];
-    let mut o = 0;
-    for i in 0..256 {
-        o = (o + h[i] as usize + key.as_bytes()[i % key.len()] as usize) % 256;
-        h.swap(i, o);
-    }
-    let mut r = String::with_capacity(64);
-    let data = base64::decode(&hash[4..]).expect("decode img src failed");
-    let mut v = 0;
-    let mut o = 0;
-    for c in data {
-        v = (v + 1) % 256;
-        o = (o + h[v] as usize) % 256;
-        h.swap(v, o);
-        let c = (c ^ (h[(h[v] as usize + h[o] as usize) % 256])) as char;
-        r.push(c);
-    }
-    r.split_off(26)
-}
-
-fn js_md5(src: &[u8]) -> String {
-    format!("{:x}", md5::compute(src))
-}
 
 fn to_large_img(src: &str) -> Cow<str> {
     lazy_static! {
         static ref SIZE: Regex = Regex::new(r"(//wx[0-9]+.sinaimg.cn/)[^/]+(/.+)").unwrap();
     }
     SIZE.replace(&src, "${1}large${2}")
-}
-
-#[test]
-fn test_decode_img_src() {
-    let hash = "fe14TW6+e8Z88GLu/NAsNlfxPFbpWZonPoYSO1iY2i6EYcjADm2ZD/0/C8YWZSF4/\
-                DmLXmBjEqUJFhvzyUELdF/VOsqxqfMnk1d1GJn2EYm/Pd3kkWU72g";
-    let key = "RGgt39TfWASbBANH0Yh7Wa6u4Cg93uMV";
-    let r = decode_img_src(hash.as_bytes(), key.as_bytes());
-    assert_eq!(
-        r,
-        "//wx1.sinaimg.cn/mw600/93c0135dgy1fgjp10foprj20ti09b75u.jpg"
-    );
 }
 
 #[test]
