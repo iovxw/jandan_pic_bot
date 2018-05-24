@@ -2,22 +2,22 @@
 
 extern crate curl;
 extern crate futures_await as futures;
-extern crate tokio_curl;
-extern crate tokio_core;
 extern crate telebot;
+extern crate tokio_core;
+extern crate tokio_curl;
 #[macro_use]
 extern crate error_chain;
-extern crate regex;
 extern crate kuchiki;
+extern crate regex;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
 #[macro_use]
 extern crate lazy_static;
-extern crate image;
-extern crate base64;
-extern crate md5;
 extern crate array_macro;
+extern crate base64;
+extern crate image;
+extern crate md5;
 
 mod errors;
 mod spider;
@@ -25,17 +25,17 @@ mod spider;
 use errors::*;
 
 use std::fs::File;
-use std::time::Duration;
-use std::sync::{Arc, Mutex};
 use std::io::Cursor;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use curl::easy::Easy;
 use futures::prelude::*;
-use tokio_curl::Session;
-use tokio_core::reactor::Core;
+use image::GenericImage;
 use telebot::bot;
 use telebot::functions::*;
-use image::GenericImage;
+use tokio_core::reactor::Core;
+use tokio_curl::Session;
 
 const TG_IMAGE_SIZE_LIMIT: u32 = 1280;
 
@@ -45,8 +45,7 @@ fn channel_id_to_int(bot_token: &str, id: &str) -> i64 {
     }
     let url = format!(
         "https://api.telegram.org/bot{}/getChat?chat_id={}",
-        bot_token,
-        id
+        bot_token, id
     );
     let mut buf: Vec<u8> = Vec::new();
 
@@ -129,12 +128,9 @@ fn send_image_to(
     images: Vec<String>,
 ) -> Result<()> {
     for img_link in images {
-        let data = await!(download_file(&session, &img_link)).chain_err(
-            || "failed to download image",
-        )?;
-        let img_type = image::guess_format(&data).chain_err(
-            || "unknown image format",
-        )?;
+        let data =
+            await!(download_file(&session, &img_link)).chain_err(|| "failed to download image")?;
+        let img_type = image::guess_format(&data).chain_err(|| "unknown image format")?;
         let send_link = bot.message(channel_id, img_link.clone());
         let img = image::load_from_memory_with_format(&data, img_type);
         if img.is_err() {
@@ -174,21 +170,21 @@ fn send_image_to(
 
 // FIXME: Everything is just work
 fn run() -> Result<()> {
-    let token = std::env::args().nth(1).ok_or(
-        "Need a Telegram bot token as argument",
-    )?;
-    let channel_id = std::env::args().nth(2).ok_or(
-        "Please specify a Telegram Channel",
-    )?;
+    let token = std::env::args()
+        .nth(1)
+        .ok_or("Need a Telegram bot token as argument")?;
+    let channel_id = std::env::args()
+        .nth(2)
+        .ok_or("Please specify a Telegram Channel")?;
     let jandan_key = std::env::args().nth(3).ok_or("")?;
 
     let mut lp = Core::new().unwrap();
 
     let bot = bot::RcBot::new(lp.handle(), &token);
 
-    let channel_id = channel_id.parse::<i64>().unwrap_or_else(|_| {
-        channel_id_to_int(&token, &channel_id)
-    });
+    let channel_id = channel_id
+        .parse::<i64>()
+        .unwrap_or_else(|_| channel_id_to_int(&token, &channel_id));
 
     let session = Session::new(lp.handle());
 
@@ -197,9 +193,8 @@ fn run() -> Result<()> {
     let old_pic = File::open("old_pic.list")
         .chain_err(|| "failed to open old_pic.list")
         .and_then(|file| {
-            serde_json::from_reader::<_, Vec<String>>(file).chain_err(
-                || "illegal data format in old_pic.list",
-            )
+            serde_json::from_reader::<_, Vec<String>>(file)
+                .chain_err(|| "illegal data format in old_pic.list")
         })
         .unwrap_or_default();
 
@@ -250,9 +245,7 @@ fn run() -> Result<()> {
         })
         .collect();
     let new_pic = lp.run(r)?;
-    let mut file = File::create("old_pic.list").chain_err(
-        || "failed to create old_pic.list",
-    )?;
+    let mut file = File::create("old_pic.list").chain_err(|| "failed to create old_pic.list")?;
     let id_list = new_pic
         .iter()
         .chain(old_pic.iter())

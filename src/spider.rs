@@ -1,17 +1,17 @@
-use std::time::Duration;
-use std::sync::{Arc, Mutex};
 use std::borrow::Cow;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use regex::Regex;
+use array_macro::array;
+use base64;
 use curl::easy::Easy;
-use tokio_curl::Session;
-use serde_json;
+use futures::{self, Future, Stream};
 use kuchiki;
 use kuchiki::traits::*;
-use futures::{self, Future, Stream};
 use md5;
-use base64;
-use array_macro::array;
+use regex::Regex;
+use serde_json;
+use tokio_curl::Session;
 
 use errors::*;
 
@@ -165,9 +165,7 @@ pub fn get_list<'a>(session: Session, key: &'a str) -> impl Stream<Item = Pic, E
             let document = kuchiki::parse_html().one(&*html);
 
             document
-                .select(
-                    "#list-pic .acv_author, #list-pic .acv_comment, #list-pic .jandan-vote",
-                )
+                .select("#list-pic .acv_author, #list-pic .acv_comment, #list-pic .jandan-vote")
                 .unwrap()
                 .collect::<Vec<_>>()
                 .chunks(3)
@@ -188,9 +186,11 @@ pub fn get_list<'a>(session: Session, key: &'a str) -> impl Stream<Item = Pic, E
                         .trim()
                         .to_owned();
 
-                    let link_raw = acv_author.select("a[href]").map_err(|_| "")?.next().ok_or(
-                        "no \"a[href]\" in \".acv_author\"",
-                    )?;
+                    let link_raw = acv_author
+                        .select("a[href]")
+                        .map_err(|_| "")?
+                        .next()
+                        .ok_or("no \"a[href]\" in \".acv_author\"")?;
                     let link = link_raw
                         .as_node()
                         .as_element()
@@ -219,12 +219,12 @@ pub fn get_list<'a>(session: Session, key: &'a str) -> impl Stream<Item = Pic, E
                         .select(".img-hash")
                         .unwrap()
                         .map(|e| {
-                            let text = e.as_node().children().next().expect(
-                                ".img-hash text is empty",
-                            );
-                            let hash = text.as_text().expect(
-                                ".img-hash first children is not text",
-                            );
+                            let text = e.as_node()
+                                .children()
+                                .next()
+                                .expect(".img-hash text is empty");
+                            let hash = text.as_text()
+                                .expect(".img-hash first children is not text");
                             let src = decode_img_src(hash.borrow().as_bytes(), key.as_bytes());
                             fix_scheme(&to_large_img(&src)).to_string()
                         })
@@ -234,9 +234,9 @@ pub fn get_list<'a>(session: Session, key: &'a str) -> impl Stream<Item = Pic, E
                         .select("span")
                         .unwrap()
                         .filter_map(|x| {
-                            x.as_node().first_child().and_then(|x| {
-                                x.as_text().map(|x| x.borrow().parse().unwrap_or(0))
-                            })
+                            x.as_node()
+                                .first_child()
+                                .and_then(|x| x.as_text().map(|x| x.borrow().parse().unwrap_or(0)))
                         })
                         .collect::<Vec<u32>>();
 
@@ -264,15 +264,9 @@ pub fn get_list<'a>(session: Session, key: &'a str) -> impl Stream<Item = Pic, E
                 .collect::<Result<Vec<_>>>()
         })
         .map(move |index| {
-            futures::stream::iter_ok(index).and_then(move |(author,
-                   link,
-                   id,
-                   oo,
-                   xx,
-                   text,
-                   images)| {
-                get_comments(&session, &id).map(move |comments| {
-                    Pic {
+            futures::stream::iter_ok(index).and_then(
+                move |(author, link, id, oo, xx, text, images)| {
+                    get_comments(&session, &id).map(move |comments| Pic {
                         author,
                         link,
                         id,
@@ -281,18 +275,16 @@ pub fn get_list<'a>(session: Session, key: &'a str) -> impl Stream<Item = Pic, E
                         text,
                         images,
                         comments,
-                    }
-                })
-            })
+                    })
+                },
+            )
         })
         .flatten_stream()
 }
 
 fn decode_img_src(hash: &[u8], key: &[u8]) -> String {
     let mut key = js_md5(&js_md5(key).as_bytes()[..16]);
-    let tail = js_md5(
-        (key.clone() + &String::from_utf8_lossy(&hash[..4])).as_bytes(),
-    );
+    let tail = js_md5((key.clone() + &String::from_utf8_lossy(&hash[..4])).as_bytes());
     key.push_str(&tail);
     let mut h = array![|x| x as u8; 256];
     let mut o = 0;
@@ -339,9 +331,7 @@ fn test_decode_img_src() {
 
 #[test]
 fn test_to_large_img() {
-    let r = to_large_img(
-        "//wx1.sinaimg.cn/mw600/93c0135dgy1fgjp10foprj20ti09b75u.jpg",
-    );
+    let r = to_large_img("//wx1.sinaimg.cn/mw600/93c0135dgy1fgjp10foprj20ti09b75u.jpg");
     assert_eq!(
         r,
         "//wx1.sinaimg.cn/large/93c0135dgy1fgjp10foprj20ti09b75u.jpg"
