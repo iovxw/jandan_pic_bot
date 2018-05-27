@@ -202,7 +202,7 @@ fn run() -> Result<()> {
             let bot = bot.clone();
             let spider::Pic {
                 author,
-                link,
+                mut link,
                 id,
                 oo,
                 xx,
@@ -213,6 +213,9 @@ fn run() -> Result<()> {
             let bot2 = bot.clone();
             let session = Session::new(handle.clone());
             let imgs = send_image_to(bot.clone(), channel_id, session, images);
+            if link.starts_with('/') {
+                link = format!("https://jandan.net{}", link);
+            }
 
             let mut msg = format!(
                 "*{}*: {}\n{}*OO*: {} *XX*: {}",
