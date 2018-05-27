@@ -11,7 +11,7 @@ use regex::Regex;
 use serde_json;
 use tokio_curl::Session;
 
-use errors::*;
+use failure::{err_msg, Error};
 
 const JANDAN_HOME: &str = "http://jandan.net/";
 const TUCAO_API: &str = "http://jandan.net/tucao/";
@@ -91,7 +91,7 @@ fn fix_scheme(s: &str) -> Cow<str> {
     }
 }
 
-fn make_request(url: &str) -> Result<(Easy, Arc<Mutex<Vec<u8>>>)> {
+fn make_request(url: &str) -> Result<(Easy, Arc<Mutex<Vec<u8>>>), Error> {
     let buf = Arc::new(Mutex::new(Vec::new()));
     let buf2 = Arc::clone(&buf);
 
@@ -125,146 +125,141 @@ pub fn get_comments<'a>(
 
     let (request, body) = make_request(&url).unwrap();
 
-    let req = session.perform(request);
+    let req = session.perform(request).map_err(|e| format_err!("{}", e));
 
-    req.map_err(|e| e.into()).and_then(move |mut resp| {
+    req.and_then(move |mut resp| {
         assert_eq!(resp.response_code().unwrap(), 200);
         let body = body.lock().unwrap();
-        serde_json::from_slice::<TucaoResp>(&body)
-            .map_err(|e| e.into())
-            .and_then(|resp| {
-                assert_eq!(resp.code, 0);
-                resp.hot_tucao
-                    .into_iter()
-                    .map(|tucao| {
-                        Ok(Comment {
-                            author: tucao.comment_author,
-                            oo: tucao.vote_positive.parse()?,
-                            xx: tucao.vote_negative.parse()?,
-                            content: escape_comment_content(&tucao.comment_content),
-                        })
-                    })
-                    .collect::<Result<_>>()
+        let resp = serde_json::from_slice::<TucaoResp>(&body)?;
+        assert_eq!(resp.code, 0);
+        resp.hot_tucao
+            .into_iter()
+            .map(|tucao| {
+                Ok(Comment {
+                    author: tucao.comment_author,
+                    oo: tucao.vote_positive.parse()?,
+                    xx: tucao.vote_negative.parse()?,
+                    content: escape_comment_content(&tucao.comment_content),
+                })
             })
+            .collect::<Result<_, Error>>()
     })
 }
 
 pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> + 'a {
     let (request, body) = make_request(JANDAN_HOME).unwrap();
 
-    let req = session.perform(request);
+    let req = session.perform(request).map_err(|e| format_err!("{}", e));
 
-    req.map_err(|e| e.into())
-        .and_then(move |mut resp| {
-            assert_eq!(resp.response_code().unwrap(), 200);
-            let body = body.lock().unwrap();
-            let html = String::from_utf8_lossy(&body);
+    req.and_then(move |mut resp| {
+        assert_eq!(resp.response_code().unwrap(), 200);
+        let body = body.lock().unwrap();
+        let html = String::from_utf8_lossy(&body);
 
-            let document = kuchiki::parse_html().one(&*html);
+        let document = kuchiki::parse_html().one(&*html);
 
-            document
-                .select("#list-pic .acv_author, #list-pic .acv_comment, #list-pic .jandan-vote")
-                .unwrap()
-                .collect::<Vec<_>>()
-                .chunks(3)
-                .map(|x| {
-                    assert_eq!(x.len(), 3);
-                    let acv_author = x[0].as_node();
-                    let acv_comment = x[1].as_node();
-                    let jandan_vote = x[2].as_node();
+        document
+            .select("#list-pic .acv_author, #list-pic .acv_comment, #list-pic .jandan-vote")
+            .unwrap()
+            .collect::<Vec<_>>()
+            .chunks(3)
+            .map(|x| {
+                assert_eq!(x.len(), 3);
+                let acv_author = x[0].as_node();
+                let acv_comment = x[1].as_node();
+                let jandan_vote = x[2].as_node();
 
-                    let author_raw = acv_author.first_child().unwrap();
-                    let author = author_raw
-                        .as_text()
-                        .unwrap()
-                        .borrow()
-                        .split('@')
-                        .next()
-                        .ok_or("no author")?
-                        .trim()
-                        .to_owned();
+                let author_raw = acv_author.first_child().unwrap();
+                let author = author_raw
+                    .as_text()
+                    .unwrap()
+                    .borrow()
+                    .split('@')
+                    .next()
+                    .ok_or(err_msg("no author"))?
+                    .trim()
+                    .to_owned();
 
-                    let link_raw = acv_author
-                        .select("a[href]")
-                        .map_err(|_| "")?
-                        .next()
-                        .ok_or("no \"a[href]\" in \".acv_author\"")?;
-                    let link = link_raw
-                        .as_node()
-                        .as_element()
-                        .unwrap()
-                        .attributes
-                        .borrow()
-                        .get("href")
-                        .unwrap()
-                        .to_owned();
+                let link_raw = acv_author
+                    .select("a[href]")
+                    .map_err(|_| err_msg("no a[href]"))?
+                    .next()
+                    .ok_or(err_msg("no \"a[href]\" in \".acv_author\""))?;
+                let link = link_raw
+                    .as_node()
+                    .as_element()
+                    .unwrap()
+                    .attributes
+                    .borrow()
+                    .get("href")
+                    .unwrap()
+                    .to_owned();
 
-                    let empty_line = Regex::new(r"^[\n\s]*$").unwrap();
-                    let mut text = String::new();
-                    for p in acv_comment.select("p").map_err(|_| "")? {
-                        for node in p.as_node().children() {
-                            if let Some(line) = node.as_text() {
-                                let line = line.borrow();
-                                if !empty_line.is_match(&line) {
-                                    text.push_str(&line);
-                                    text.push('\n');
-                                }
+                let empty_line = Regex::new(r"^[\n\s]*$").unwrap();
+                let mut text = String::new();
+                for p in acv_comment.select("p").map_err(|_| err_msg("no p"))? {
+                    for node in p.as_node().children() {
+                        if let Some(line) = node.as_text() {
+                            let line = line.borrow();
+                            if !empty_line.is_match(&line) {
+                                text.push_str(&line);
+                                text.push('\n');
                             }
                         }
                     }
+                }
 
-                    let images = acv_comment
-                        .select(".img-hash")
-                        .unwrap()
-                        .map(|e| {
-                            let text = e.as_node()
-                                .children()
-                                .next()
-                                .expect(".img-hash text is empty");
-                            let raw_src = text.as_text()
-                                .expect(".img-hash first children is not text");
+                let images = acv_comment
+                    .select(".img-hash")
+                    .unwrap()
+                    .map(|e| {
+                        let text = e.as_node()
+                            .children()
+                            .next()
+                            .expect(".img-hash text is empty");
+                        let raw_src = text.as_text()
+                            .expect(".img-hash first children is not text");
 
-                            let src = String::from_utf8(
-                                base64::decode(&*raw_src.borrow()).expect("base64 decode"),
-                            ).expect("utf8 decode");
-                            fix_scheme(&to_large_img(&src)).to_string()
-                        })
-                        .collect::<Vec<_>>();
+                        let src = String::from_utf8(
+                            base64::decode(&*raw_src.borrow()).expect("base64 decode"),
+                        ).expect("utf8 decode");
+                        fix_scheme(&to_large_img(&src)).to_string()
+                    })
+                    .collect::<Vec<_>>();
 
-                    let vote = jandan_vote
-                        .select("span")
-                        .unwrap()
-                        .filter_map(|x| {
-                            x.as_node()
-                                .first_child()
-                                .and_then(|x| x.as_text().map(|x| x.borrow().parse().unwrap_or(0)))
-                        })
-                        .collect::<Vec<u32>>();
+                let vote = jandan_vote
+                    .select("span")
+                    .unwrap()
+                    .filter_map(|x| {
+                        x.as_node()
+                            .first_child()
+                            .and_then(|x| x.as_text().map(|x| x.borrow().parse().unwrap_or(0)))
+                    })
+                    .collect::<Vec<u32>>();
 
-                    assert_eq!(vote.len(), 2);
-                    let oo = vote[0];
-                    let xx = vote[1];
+                assert_eq!(vote.len(), 2);
+                let oo = vote[0];
+                let xx = vote[1];
 
-                    let id = jandan_vote
-                        .select("a[data-id]")
-                        .unwrap()
-                        .filter_map(|a| {
-                            a.as_node()
-                                .as_element()
-                                .unwrap()
-                                .attributes
-                                .borrow()
-                                .get("data-id")
-                                .map(|x| x.to_owned())
-                        })
-                        .next()
-                        .ok_or("no \"a[data-id]\" in \".jandan-vote\"")?;
+                let id = jandan_vote
+                    .select("a[data-id]")
+                    .unwrap()
+                    .filter_map(|a| {
+                        a.as_node()
+                            .as_element()
+                            .unwrap()
+                            .attributes
+                            .borrow()
+                            .get("data-id")
+                            .map(|x| x.to_owned())
+                    })
+                    .next()
+                    .ok_or(err_msg("no \"a[data-id]\" in \".jandan-vote\""))?;
 
-                    Ok((author, link, id, oo, xx, text, images))
-                })
-                .collect::<Result<Vec<_>>>()
-        })
-        .map(move |index| {
+                Ok((author, link, id, oo, xx, text, images))
+            })
+            .collect::<Result<Vec<_>, Error>>()
+    }).map(move |index| {
             futures::stream::iter_ok(index).and_then(
                 move |(author, link, id, oo, xx, text, images)| {
                     get_comments(&session, &id).map(move |comments| Pic {
@@ -282,7 +277,6 @@ pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> 
         })
         .flatten_stream()
 }
-
 
 fn to_large_img(src: &str) -> Cow<str> {
     lazy_static! {
