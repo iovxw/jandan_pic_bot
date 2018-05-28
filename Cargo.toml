@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["iovxw <iovxw@outlook.com>"]
 
 [dependencies]
+log = "0.4"
+env_logger = "0.5"
 failure = "0.1"
 regex = "0.2"
 curl = "0.4"

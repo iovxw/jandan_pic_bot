@@ -15,7 +15,9 @@ extern crate serde_json;
 #[macro_use]
 extern crate lazy_static;
 extern crate base64;
+extern crate env_logger;
 extern crate image;
+extern crate log;
 
 mod spider;
 
@@ -115,6 +117,27 @@ fn download_file(
         .map_err(|_| err_msg("failed to download image"))
 }
 
+// FIXME: futures-await
+fn video_send_failed(
+    r: Result<(bot::RcBot, telebot::objects::Message)>,
+) -> impl Future<Item = bool, Error = failure::Error> {
+    if let Ok((bot, msg)) = r {
+        let chat_id = msg.chat.id;
+        let msg_id = msg.message_id;
+        let failed = (move || -> Option<bool> {
+            let video = msg.video?;
+            Some(video.mime_type? != "video/mp4" || video.duration == 0)
+        })().unwrap_or(true);
+        if failed {
+            futures::future::Either::A(bot.delete_message(chat_id, msg_id).send().map(|_| true))
+        } else {
+            futures::future::Either::B(futures::future::ok(false))
+        }
+    } else {
+        futures::future::Either::B(futures::future::ok(true))
+    }
+}
+
 #[async]
 fn send_image_to(
     bot: bot::RcBot,
@@ -125,7 +148,8 @@ fn send_image_to(
     for img_link in images {
         let data = await!(download_file(&session, &img_link))?;
         let img_type = image::guess_format(&data).context("unknown image format")?;
-        let send_link = bot.message(channel_id, img_link.clone())
+        let send_link = bot
+            .message(channel_id, img_link.clone())
             .disable_notificaton(true);
         let img = image::load_from_memory_with_format(&data, img_type);
         if img.is_err() {
@@ -142,25 +166,7 @@ fn send_image_to(
                     .disable_notification(true)
                     .send()
             );
-            let mut failed = send_by_link.is_err();
-            if let Ok((
-                _,
-                telebot::objects::Message {
-                    message_id: msg_id,
-                    video:
-                        Some(telebot::objects::Video {
-                            mime_type: Some(t), ..
-                        }),
-                    ..
-                },
-            )) = send_by_link
-            {
-                if t != "video/mp4" {
-                    failed = true;
-                    await!(bot.delete_message(channel_id, msg_id).send())?;
-                }
-            }
-            if failed {
+            if await!(video_send_failed(send_by_link))? {
                 let read = Cursor::new(data);
                 let send_by_file = await!(
                     bot.video(channel_id)
@@ -168,7 +174,7 @@ fn send_image_to(
                         .disable_notification(true)
                         .send()
                 );
-                if send_by_file.is_err() {
+                if await!(video_send_failed(send_by_file))? {
                     await!(send_link.send())?;
                 }
             }
@@ -198,6 +204,7 @@ fn send_image_to(
 
 // FIXME: Everything is just work
 fn main() -> Result<()> {
+    env_logger::init();
     let token = std::env::args()
         .nth(1)
         .ok_or(err_msg("Need a Telegram bot token as argument"))?;
@@ -226,7 +233,8 @@ fn main() -> Result<()> {
         .unwrap_or_default();
 
     let handle = lp.handle();
-    let r = data.filter(|pic| !old_pic.contains(&pic.id))
+    let r = data
+        .filter(|pic| !old_pic.contains(&pic.id))
         .and_then(move |pic| {
             let handle = handle.clone();
             let bot = bot.clone();
