@@ -146,12 +146,21 @@ fn send_image_to(
     images: Vec<String>,
 ) -> Result<()> {
     for img_link in images {
-        let data = await!(download_file(&session, &img_link))?;
-        let img_type = image::guess_format(&data).context("unknown image format")?;
         let send_link = bot
             .message(channel_id, img_link.clone())
             .disable_notificaton(true);
-        let img = image::load_from_memory_with_format(&data, img_type);
+        let data = await!(download_file(&session, &img_link));
+        if data.is_err() {
+            await!(send_link.send())?;
+            continue;
+        }
+        let data = data.unwrap();
+        let is_gif = img_link.ends_with(".gif");
+        let img = if is_gif {
+            image::load_from_memory_with_format(&data, image::ImageFormat::GIF)
+        } else {
+            image::load_from_memory(&data)
+        };
         if img.is_err() {
             await!(send_link.send())?;
             continue;
@@ -159,7 +168,7 @@ fn send_image_to(
         let img = img.unwrap();
         if std::cmp::max(img.width(), img.height()) > TG_IMAGE_SIZE_LIMIT {
             await!(send_link.send())?;
-        } else if let image::GIF = img_type {
+        } else if is_gif {
             let send_by_link = await!(
                 bot.video(channel_id)
                     .url(img_link.as_str())
@@ -167,10 +176,11 @@ fn send_image_to(
                     .send()
             );
             if await!(video_send_failed(send_by_link))? {
-                let read = Cursor::new(data);
+                let mut buf = Vec::new();
+                img.write_to(&mut buf, image::ImageOutputFormat::GIF)?;
                 let send_by_file = await!(
                     bot.video(channel_id)
-                        .file((img_link.as_str(), read))
+                        .file((img_link.as_str(), Cursor::new(buf)))
                         .disable_notification(true)
                         .send()
                 );
