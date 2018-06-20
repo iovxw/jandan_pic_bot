@@ -124,11 +124,15 @@ fn video_send_failed(
     if let Ok((bot, msg)) = r {
         let chat_id = msg.chat.id;
         let msg_id = msg.message_id;
-        let failed = (move || -> Option<bool> {
-            let video = msg.video?;
-            Some(video.mime_type? != "video/mp4" || video.duration == 0)
+        let failed = (|| -> Option<bool> {
+            let video = msg.video.as_ref()?;
+            Some(video.mime_type.as_ref()? != "video/mp4" || video.duration == 0)
         })().unwrap_or(true);
-        if failed {
+        let failed2 = (move || -> Option<bool> {
+            let video = msg.document?;
+            Some(video.mime_type? != "video/mp4")
+        })().unwrap_or(true);
+        if failed && failed2 {
             futures::future::Either::A(bot.delete_message(chat_id, msg_id).send().map(|_| true))
         } else {
             futures::future::Either::B(futures::future::ok(false))
@@ -176,11 +180,9 @@ fn send_image_to(
                     .send()
             );
             if await!(video_send_failed(send_by_link))? {
-                let mut buf = Vec::new();
-                img.write_to(&mut buf, image::ImageOutputFormat::GIF)?;
                 let send_by_file = await!(
                     bot.video(channel_id)
-                        .file((img_link.as_str(), Cursor::new(buf)))
+                        .file((img_link.as_str(), Cursor::new(data)))
                         .disable_notification(true)
                         .send()
                 );
