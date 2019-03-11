@@ -252,7 +252,7 @@ fn main() -> Result<()> {
             let bot = bot.clone();
             let spider::Pic {
                 author,
-                mut link,
+                _link,
                 id,
                 oo,
                 xx,
@@ -263,14 +263,11 @@ fn main() -> Result<()> {
             let bot2 = bot.clone();
             let session = Session::new(handle.clone());
             let imgs = send_image_to(bot.clone(), channel_id, session, images);
-            if link.starts_with('/') {
-                link = format!("https://jandan.net{}", link);
-            }
 
             let mut msg = format!(
-                "*{}*: {}\n{}*OO*: {} *XX*: {}",
+                "*{}*: https://jandan.net/t/{}\n{}*OO*: {} *XX*: {}",
                 &author.replace("*", ""),
-                &link,
+                &id,
                 telegram_md_escape(&text),
                 oo,
                 xx
