@@ -31,6 +31,7 @@ use failure::{err_msg, ResultExt};
 use futures::prelude::*;
 use image::GenericImage;
 use telebot::bot;
+use telebot::file::MediaFile;
 use telebot::functions::*;
 use tokio_core::reactor::Core;
 use tokio_curl::Session;
@@ -152,7 +153,7 @@ fn send_image_to(
     for img_link in images {
         let send_link = bot
             .message(channel_id, img_link.clone())
-            .disable_notificaton(true);
+            .disable_notification(true);
         let data = await!(download_file(&session, &img_link));
         if data.is_err() {
             await!(send_link.send())?;
@@ -175,7 +176,7 @@ fn send_image_to(
         } else if is_gif {
             let send_by_link = await!(
                 bot.video(channel_id)
-                    .url(img_link.as_str())
+                    .video(MediaFile::SingleFile(img_link.clone()))
                     .disable_notification(true)
                     .send()
             );
@@ -193,7 +194,7 @@ fn send_image_to(
         } else {
             let send_by_link = await!(
                 bot.photo(channel_id)
-                    .url(img_link.as_str())
+                    .photo(MediaFile::SingleFile(img_link.clone()))
                     .disable_notification(true)
                     .send()
             );
@@ -252,7 +253,7 @@ fn main() -> Result<()> {
             let bot = bot.clone();
             let spider::Pic {
                 author,
-                _link,
+                link: _link,
                 id,
                 oo,
                 xx,
@@ -284,7 +285,7 @@ fn main() -> Result<()> {
 
             imgs.and_then(move |_| {
                 bot2.message(channel_id, msg)
-                    .parse_mode("Markdown")
+                    .parse_mode(ParseMode::Markdown)
                     .disable_web_page_preview(true)
                     .send()
             }).map(move |_| id)
