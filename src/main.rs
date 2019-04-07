@@ -184,9 +184,7 @@ fn send_image_to(
                     .send()
             );
             if await!(video_send_failed(send_by_link))? {
-                if let Err(e) = send_by_link {
-                    eprintln!("Failed to send video by link: {}\n{:?}", img_link, e);
-                }
+                eprintln!("Failed to send video by link: {}", img_link);
                 let send_by_file = await!(
                     bot.video(channel_id)
                         .file((img_link.as_str(), Cursor::new(data)))
@@ -194,9 +192,7 @@ fn send_image_to(
                         .send()
                 );
                 if await!(video_send_failed(send_by_file))? {
-                    if let Err(e) = send_by_file {
-                        eprintln!("Failed to send video by file: {}\n{:?}", img_link, e);
-                    }
+                    eprintln!("Failed to send video by file: {}", img_link);
                     await!(send_link.send())?;
                 }
             }
