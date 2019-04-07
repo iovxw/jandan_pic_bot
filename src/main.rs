@@ -156,6 +156,7 @@ fn send_image_to(
             .disable_notification(true);
         let data = await!(download_file(&session, &img_link));
         if data.is_err() {
+            eprintln!("Failed to download image: {}", img_link);
             await!(send_link.send())?;
             continue;
         }
@@ -167,11 +168,13 @@ fn send_image_to(
             image::load_from_memory(&data)
         };
         if img.is_err() {
+            eprintln!("Failed to parse image: {}", img_link);
             await!(send_link.send())?;
             continue;
         }
         let img = img.unwrap();
         if std::cmp::max(img.width(), img.height()) > TG_IMAGE_SIZE_LIMIT {
+            println!("Image is too large: {}", img_link);
             await!(send_link.send())?;
         } else if is_gif {
             let send_by_link = await!(
@@ -181,6 +184,9 @@ fn send_image_to(
                     .send()
             );
             if await!(video_send_failed(send_by_link))? {
+                if let Err(e) = send_by_link {
+                    eprintln!("Failed to send video by link: {}\n{:?}", img_link, e);
+                }
                 let send_by_file = await!(
                     bot.video(channel_id)
                         .file((img_link.as_str(), Cursor::new(data)))
@@ -188,17 +194,23 @@ fn send_image_to(
                         .send()
                 );
                 if await!(video_send_failed(send_by_file))? {
+                    if let Err(e) = send_by_file {
+                        eprintln!("Failed to send video by file: {}\n{:?}", img_link, e);
+                    }
                     await!(send_link.send())?;
                 }
             }
         } else {
             let send_by_link = await!(
                 bot.photo(channel_id)
-                    .photo(MediaFile::SingleFile(img_link.clone()))
+                    .file(telebot::File::Url(img_link.clone()))
                     .disable_notification(true)
                     .send()
             );
             if send_by_link.is_err() {
+                if let Err(e) = send_by_link {
+                    eprintln!("Failed to send photo by link: {}\n{:?}", img_link, e);
+                }
                 let read = Cursor::new(data);
                 let send_by_file = await!(
                     bot.photo(channel_id)
@@ -207,6 +219,9 @@ fn send_image_to(
                         .send()
                 );
                 if send_by_file.is_err() {
+                    if let Err(e) = send_by_file {
+                        eprintln!("Failed to send photo by file: {}\n{:?}", img_link, e);
+                    }
                     await!(send_link.send())?;
                 }
             }
