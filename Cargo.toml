@@ -16,7 +16,7 @@ serde_derive = "1.0"
 futures = "0.1"
 futures-await = "0.1"
 tokio-core = "0.1"
-telebot = "0.2"
+telebot = { path = "./telebot" }
 kuchiki = "0.5"
 lazy_static = "0.2"
 image = "0.19"
