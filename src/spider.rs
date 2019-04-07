@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use base64;
 use curl::easy::Easy;
 use futures::{self, Future, Stream};
 use kuchiki;
@@ -208,20 +207,18 @@ pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> 
                 }
 
                 let images = acv_comment
-                    .select(".img-hash")
+                    .select(".view_img_link")
                     .unwrap()
                     .map(|e| {
-                        let text = e.as_node()
-                            .children()
-                            .next()
-                            .expect(".img-hash text is empty");
-                        let raw_src = text.as_text()
-                            .expect(".img-hash first children is not text");
-
-                        let src = String::from_utf8(
-                            base64::decode(&*raw_src.borrow()).expect("base64 decode"),
-                        ).expect("utf8 decode");
-                        fix_scheme(&to_large_img(&src)).to_string()
+                        let src = e.as_node()
+                            .as_element()
+                            .unwrap()
+                            .attributes
+                            .borrow()
+                            .get("href")
+                            .unwrap()
+                            .to_owned();
+                        fix_scheme(&src).to_string()
                     })
                     .collect::<Vec<_>>();
 
@@ -230,8 +227,8 @@ pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> 
                     .unwrap()
                     .filter_map(|x| {
                         x.as_node()
-                            .first_child()
-                            .and_then(|x| x.as_text().map(|x| x.borrow().parse().unwrap_or(0)))
+                         .first_child()
+                         .and_then(|x| x.as_text().map(|x| x.borrow().parse().unwrap_or(0)))
                     })
                     .collect::<Vec<u32>>();
 
@@ -274,13 +271,6 @@ pub fn get_list<'a>(session: Session) -> impl Stream<Item = Pic, Error = Error> 
             )
         })
         .flatten_stream()
-}
-
-fn to_large_img(src: &str) -> Cow<str> {
-    lazy_static! {
-        static ref SIZE: Regex = Regex::new(r"(//wx[0-9]+.sinaimg.cn/)[^/]+(/.+)").unwrap();
-    }
-    SIZE.replace(&src, "${1}large${2}")
 }
 
 #[test]
