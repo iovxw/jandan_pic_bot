@@ -65,12 +65,10 @@ struct Tucao {
 
 fn escape_comment_content(s: &str) -> String {
     lazy_static!{
-        static ref IMG: Regex =
-            Regex::new(r#"<a href="(:?http|https:)?(?P<img>//[^"]*)"[^>]*>[^<]*</a><br><img[^>]*>"#)
-            .unwrap();
+        static ref IMG: Regex = Regex::new(r#"<img src="(?P<img>[^"]+)" />"#).unwrap();
         static ref AT: Regex = Regex::new(r#"<a[^>]*>(?P<at>[^<]*)</a>"#).unwrap();
     }
-    let s = IMG.replace_all(s, "https:$img");
+    let s = IMG.replace_all(s, "$img");
     let s = AT.replace_all(&s, "$at");
 
     s.replace("<br />\n", "\n")
