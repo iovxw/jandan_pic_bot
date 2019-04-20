@@ -247,6 +247,36 @@ pub struct SendDocument {
     reply_markup: Option<ReplyMarkup>,
 }
 
+/// Use this method to send animation files (GIF or H.264/MPEG-4 AVC video without sound).
+/// On success, the sent Message is returned. Bots can currently send animation files of up to
+/// 50 MB in size, this limit may be changed in the future.
+#[derive(TelegramFunction, Serialize)]
+#[call = "sendAnimation"]
+#[answer = "Message"]
+#[function = "animation"]
+#[file_kind = "animation"]
+pub struct SendAnimation {
+    chat_id: Integer,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    animation: Option<MediaFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration: Option<Integer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    width: Option<Integer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    height: Option<Integer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parse_mode: Option<ParseMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disable_notification: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_to_message_id: Option<Integer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_markup: Option<ReplyMarkup>,
+}
+
 /// Use this method to send .webp stickers. On success, the sent Message is returned.
 #[derive(TelegramFunction, Serialize)]
 #[call = "sendSticker"]

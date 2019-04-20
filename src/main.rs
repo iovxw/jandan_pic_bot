@@ -122,24 +122,27 @@ fn download_file(
 fn video_send_failed(
     r: Result<(bot::RcBot, telebot::objects::Message)>,
 ) -> impl Future<Item = bool, Error = failure::Error> {
-    if let Ok((bot, msg)) = r {
-        let chat_id = msg.chat.id;
-        let msg_id = msg.message_id;
-        let failed = (|| -> Option<bool> {
-            let video = msg.video.as_ref()?;
-            Some(video.mime_type.as_ref()? != "video/mp4" || video.duration == 0)
-        })().unwrap_or(true);
-        let failed2 = (move || -> Option<bool> {
-            let video = msg.document?;
-            Some(video.mime_type? != "video/mp4")
-        })().unwrap_or(true);
-        if failed && failed2 {
-            futures::future::Either::A(bot.delete_message(chat_id, msg_id).send().map(|_| true))
-        } else {
-            futures::future::Either::B(futures::future::ok(false))
+    match r {
+        Ok((bot, msg)) => {
+            let chat_id = msg.chat.id;
+            let msg_id = msg.message_id;
+            let failed = (|| -> Option<bool> {
+                let video = msg.video.as_ref()?;
+                Some(video.mime_type.as_ref()? != "video/mp4" || video.duration == 0)
+            })().unwrap_or(true);
+            let failed2 = (move || -> Option<bool> {
+                let video = msg.document?;
+                Some(video.mime_type? != "video/mp4")
+            })().unwrap_or(true);
+            if failed && failed2 {
+                futures::future::Either::A(bot.delete_message(chat_id, msg_id).send().map(|_| true))
+            } else {
+                futures::future::Either::B(futures::future::ok(false))
+            }
         }
-    } else {
-        futures::future::Either::B(futures::future::ok(true))
+        Err(e) => {
+            futures::future::Either::B(futures::future::ok(true))
+        }
     }
 }
 
@@ -178,15 +181,15 @@ fn send_image_to(
             await!(send_link.send())?;
         } else if is_gif {
             let send_by_link = await!(
-                bot.video(channel_id)
-                    .video(MediaFile::SingleFile(img_link.clone()))
+                bot.animation(channel_id)
+                    .animation(MediaFile::SingleFile(img_link.clone()))
                     .disable_notification(true)
                     .send()
             );
             if await!(video_send_failed(send_by_link))? {
                 eprintln!("Failed to send video by link: {}", img_link);
                 let send_by_file = await!(
-                    bot.video(channel_id)
+                    bot.animation(channel_id)
                         .file((img_link.as_str(), Cursor::new(data)))
                         .disable_notification(true)
                         .send()
