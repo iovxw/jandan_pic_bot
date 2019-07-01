@@ -110,12 +110,15 @@ fn download_file(
     }
     session
         .perform(req)
-        .map(|mut resp| {
-            assert_eq!(resp.response_code().unwrap(), 200);
+        .map_err(|e| format_err!("failed to download image: {}", e))
+        .and_then(|mut resp| {
+            let code = resp.response_code().unwrap();
+            if code != 200 {
+                return Err(format_err!("failed to download image: HTTP {}", code));
+            }
             std::mem::drop(resp);
-            Arc::try_unwrap(buf).unwrap().into_inner().unwrap()
+            Ok(Arc::try_unwrap(buf).unwrap().into_inner().unwrap())
         })
-        .map_err(|_| err_msg("failed to download image"))
 }
 
 // FIXME: futures-await
