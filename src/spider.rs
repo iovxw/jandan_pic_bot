@@ -88,7 +88,7 @@ fn fix_scheme(s: &str) -> Cow<str> {
     }
 }
 
-fn make_request(url: &str) -> Result<(Easy, Arc<Mutex<Vec<u8>>>), Error> {
+pub fn make_request(url: &str) -> Result<(Easy, Arc<Mutex<Vec<u8>>>), Error> {
     let buf = Arc::new(Mutex::new(Vec::new()));
     let buf2 = Arc::clone(&buf);
 

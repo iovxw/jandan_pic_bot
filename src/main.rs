@@ -232,6 +232,55 @@ fn send_image_to(
     Ok(())
 }
 
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "UPPERCASE")]
+struct LivereResp {
+    best_re_list: Option<Vec<LivereComment>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct LivereComment {
+    bad: u32,
+    good: u32,
+    content: String,
+    name: String,
+}
+
+pub fn get_livere_comments<'a>(
+    session: &Session,
+    id: &str,
+) -> impl Future<Item = Vec<spider::Comment>, Error = failure::Error> + 'a {
+    let url = format!("https://api-city.livere.com/livereDataLoad?refer=jandan.net/yellowcomment-{}\
+                       &version=lv9\
+                       &consumer_seq=1020\
+                       &livere_seq=45041", id);
+
+    let (request, body) = spider::make_request(&url).unwrap();
+
+    let req = session.perform(request).map_err(|e| format_err!("{}", e));
+
+    req.and_then(move |mut resp| {
+        assert_eq!(resp.response_code().unwrap(), 200);
+        let body = body.lock().unwrap();
+        let resp = serde_json::from_slice::<LivereResp>(&body)?;
+        if resp.best_re_list.is_none() {
+            return Ok(Vec::new());
+        }
+        resp.best_re_list
+            .unwrap()
+            .into_iter()
+            .map(|comment| {
+                Ok(spider::Comment {
+                    author: comment.name,
+                    oo: comment.good,
+                    xx: comment.bad,
+                    content: comment.content,
+                })
+            })
+            .collect::<Result<_>>()
+    })
+}
+
 // FIXME: Everything is just work
 fn main() -> Result<()> {
     env_logger::init();
@@ -279,6 +328,7 @@ fn main() -> Result<()> {
                 comments,
             } = pic;
             let bot2 = bot.clone();
+            let bot3 = bot.clone();
             let session = Session::new(handle.clone());
             let imgs = send_image_to(bot.clone(), channel_id, session, images);
 
@@ -300,11 +350,36 @@ fn main() -> Result<()> {
                 ));
             }
 
+            let session = Session::new(handle.clone());
+            let get_livere_comments_future = get_livere_comments(&session, &id);
+
             imgs.and_then(move |_| {
                 bot2.message(channel_id, msg)
                     .parse_mode(ParseMode::Markdown)
                     .disable_web_page_preview(true)
                     .send()
+            }).and_then(move |_| {
+                get_livere_comments_future
+            }).and_then(move |comments| {
+                if comments.is_empty() {
+                    return futures::future::Either::A(futures::future::ok(()));
+                }
+                let mut msg = "以下来自 ColtIsGayGay 的第三方吐槽，[Chrome 插件](http://jandan.net/t/4289693)".to_string();
+                for comment in &comments {
+                    msg.push_str(&format!(
+                        "\n*{}*: {}\n*OO*: {}, *XX*: {}",
+                        &comment.author.replace("*", ""),
+                        telegram_md_escape(&comment.content),
+                        comment.oo,
+                        comment.xx
+                    ));
+                }
+                let f = bot3.message(channel_id, msg)
+                    .parse_mode(ParseMode::Markdown)
+                    .disable_web_page_preview(true)
+                    .send()
+                    .map(|_| ());
+                futures::future::Either::B(f)
             }).map(move |_| id)
         })
         .collect();
