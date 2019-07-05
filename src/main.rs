@@ -274,7 +274,7 @@ pub fn get_livere_comments<'a>(
                     author: comment.name,
                     oo: comment.good,
                     xx: comment.bad,
-                    content: comment.content,
+                    content: spider::escape_comment_content(&comment.content),
                 })
             })
             .collect::<Result<_>>()
@@ -364,7 +364,7 @@ fn main() -> Result<()> {
                 if comments.is_empty() {
                     return futures::future::Either::A(futures::future::ok(()));
                 }
-                let mut msg = "以下来自 ColtIsGayGay 的第三方吐槽，[Chrome 插件](http://jandan.net/t/4289693)".to_string();
+                let mut msg = "以下来自 ColtIsGayGay 的第三方吐槽，[Userscript](https://github.com/iovxw/JandanLivere)".to_string();
                 for comment in &comments {
                     msg.push_str(&format!(
                         "\n*{}*: {}\n*OO*: {}, *XX*: {}",

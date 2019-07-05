@@ -45,24 +45,13 @@ struct TucaoResp {
 
 #[derive(Deserialize, Debug)]
 struct Tucao {
-    #[serde(rename = "comment_ID")]
-    comment_id: String,
-    #[serde(rename = "comment_post_ID")]
-    comment_post_id: String,
     comment_author: String,
-    comment_date: String,
     comment_content: String,
-    comment_parent: String,
-    #[serde(rename = "comment_reply_ID")]
-    comment_reply_id: String,
-    vote_positive: String,
-    vote_negative: String,
-    comment_date_int: i64,
-    is_tip_user: i64,
-    is_jandan_user: i64,
+    vote_positive: u32,
+    vote_negative: u32,
 }
 
-fn escape_comment_content(s: &str) -> String {
+pub fn escape_comment_content(s: &str) -> String {
     lazy_static!{
         static ref IMG: Regex = Regex::new(r#"<img src="(?P<img>[^"]+)" />"#).unwrap();
         static ref AT: Regex = Regex::new(r#"<a[^>]*>(?P<at>[^<]*)</a>"#).unwrap();
@@ -134,8 +123,8 @@ pub fn get_comments<'a>(
             .map(|tucao| {
                 Ok(Comment {
                     author: tucao.comment_author,
-                    oo: tucao.vote_positive.parse()?,
-                    xx: tucao.vote_negative.parse()?,
+                    oo: tucao.vote_positive,
+                    xx: tucao.vote_negative,
                     content: escape_comment_content(&tucao.comment_content),
                 })
             })
