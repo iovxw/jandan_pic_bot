@@ -61,9 +61,13 @@ pub fn escape_comment_content(s: &str) -> String {
 
     s.replace("<br />\n", "\n")
         .replace("&quot;", "\"")
+        .replace("&#34;", "\"")
         .replace("&amp;", "&")
+        .replace("&#38;", "&")
         .replace("&lt;", "<")
+        .replace("&#60;", "<")
         .replace("&gt;", ">")
+        .replace("&#62;", ">")
 }
 
 fn fix_scheme(s: &str) -> Cow<str> {
