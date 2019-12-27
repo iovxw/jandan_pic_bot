@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
                         .await?;
                 } else {
                     let img = download_image(&image).await?;
-                    let caption = format!("_[查看大图]({})_", image);
+                    let caption = format!("[查看大图]({})", image);
                     let photo = if std::cmp::max(img.width(), img.height()) > TG_IMAGE_SIZE_LIMIT {
                         Photo::url(&image).caption(Text::markdown(&caption))
                     } else {
