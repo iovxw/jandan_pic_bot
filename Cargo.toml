@@ -25,7 +25,6 @@ features = ["rustls"]
 git = "https://gitlab.com/SnejUgal/tbot.git"
 
 [dependencies.reqwest]
-version = "0.10.0-alpha.2"
+version = "0.10"
 default-features = false
 features = ["rustls-tls", "gzip", "json"]
-git = "https://github.com/seanmonstar/reqwest.git"
