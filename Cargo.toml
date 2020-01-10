@@ -19,10 +19,9 @@ serde = { version = "1.0", features = ["derive"] }
 image = "0.23.0-preview.0"
 
 [dependencies.tbot]
-version = "0.3"
+version = "0.4"
 default-features = false
 features = ["rustls"]
-git = "https://gitlab.com/SnejUgal/tbot.git"
 
 [dependencies.reqwest]
 version = "0.10"
