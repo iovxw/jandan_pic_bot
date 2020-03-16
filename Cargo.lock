@@ -511,9 +511,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9433d71e471c1736fd5a61b671fc0b148d7a2992f666c958d03cd8feb3b88d1"
+checksum = "9d5c295d1c0c68e4e42003d75f908f5e16a1edd1cbe0b0d02e4dc2006a384f47"
 dependencies = [
  "bytes",
  "fnv",
@@ -598,9 +598,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa1c527bbc634be72aa7ba31e4e4def9bbb020f5416916279b7c705cd838893e"
+checksum = "e7b15203263d1faa615f9337d79c1d37959439dc46c2b4faab33286fadc2a1c5"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -1794,9 +1794,9 @@ dependencies = [
 
 [[package]]
 name = "tbot"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b2dab802807c5249fe0ba97b9a80819d2b792e42751606ce5d816a883e2bae7"
+checksum = "fc7aed420a6b634256ec990064a25fb9d46b889613ff645dfaaf699f4a3e7b8d"
 dependencies = [
  "hyper",
  "hyper-proxy",
