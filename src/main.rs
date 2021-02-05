@@ -71,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
             comments,
         } = pic;
 
+
         for image in images {
             match async {
                 if image.ends_with("gif") {
@@ -132,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
             .call()
             .await?;
         new_history.push(id.into());
+        std::thread::sleep_ms(10000);
     }
     new_history.extend(
         history
