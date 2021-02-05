@@ -7,6 +7,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
         rust: [stable, nightly]
+        include:
+        # Allow failures on nightly
+        - rust: nightly
+          can-fail: true
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -16,4 +20,4 @@ jobs:
     - uses: actions/checkout@master
     - name: Run tests
       run: cargo test --verbose
-      continue-on-error: ${{ matrix.rust == 'nightly' }}
+      continue-on-error: ${{ matrix.can-fail }}
