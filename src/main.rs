@@ -1,3 +1,5 @@
+#![feature(iter_intersperse)]
+
 use std::borrow::Cow;
 use std::fmt::Write;
 use std::fs;
@@ -5,13 +7,12 @@ use std::time::Duration;
 
 use anyhow::anyhow;
 use image::{self, GenericImageView};
-use itertools::Itertools;
 use log::error;
 use tbot::{
     self,
     types::{
         input_file::{Animation, Photo},
-        parameters::{ChatId, NotificationState, Text, WebPagePreviewState},
+        parameters::{ChatId, Text},
     },
 };
 use tokio;
@@ -77,20 +78,20 @@ async fn main() -> anyhow::Result<()> {
         for image in images {
             match async {
                 if image.ends_with("gif") {
-                    bot.send_animation(channel, Animation::url(&image))
-                        .notification(NotificationState::Disabled)
+                    bot.send_animation(channel, Animation::with_url(&image))
+                        .is_notification_disabled(true)
                         .call()
                         .await?;
                 } else {
                     let img = download_image(&image).await?;
                     let caption = format!("[查看大图]({})", image);
                     let photo = if std::cmp::max(img.width(), img.height()) > TG_IMAGE_SIZE_LIMIT {
-                        Photo::url(&image).caption(Text::markdown(&caption))
+                        Photo::with_url(&image).caption(Text::with_markdown(&caption))
                     } else {
-                        Photo::url(&image)
+                        Photo::with_url(&image)
                     };
                     bot.send_photo(channel, photo)
-                        .notification(NotificationState::Disabled)
+                        .is_notification_disabled(true)
                         .call()
                         .await?;
                 }
@@ -102,11 +103,13 @@ async fn main() -> anyhow::Result<()> {
                 Err(e) => {
                     error!("{}: {}", image, e);
                     bot.send_message(channel, &image)
-                        .notification(NotificationState::Disabled)
+                        .is_notification_disabled(true)
                         .call()
                         .await?;
                 }
             }
+
+            tokio::time::delay_for(Duration::from_secs(3)).await;
         }
 
         let mut msg = format!(
@@ -130,12 +133,11 @@ async fn main() -> anyhow::Result<()> {
             )
             .unwrap();
         }
-        bot.send_message(channel, Text::markdown(&msg))
-            .web_page_preview(WebPagePreviewState::Disabled)
+        bot.send_message(channel, Text::with_markdown(&msg))
+            .is_web_page_preview_disabled(true)
             .call()
             .await?;
         fresh_imgs.push(id.into());
-        // tokio::time::delay_for(Duration::from_secs(10)).await;
     }
 
     fs::write(

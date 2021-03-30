@@ -2,7 +2,6 @@ use std::borrow::Cow;
 use std::time::Duration;
 
 use anyhow;
-use itertools::Itertools;
 use lazy_static::lazy_static;
 use marksman_escape::Unescape;
 use regex::Regex;
