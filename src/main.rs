@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::fmt::Write;
 use std::fs;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use image::{self, GenericImageView};
@@ -16,6 +17,7 @@ use tbot::{
 use tokio;
 
 mod spider;
+mod wayback_machine;
 
 const HISTORY_SIZE: usize = 100;
 const HISTORY_FILE: &str = "history.text";
@@ -51,13 +53,14 @@ async fn main() -> anyhow::Result<()> {
     let channel_id = std::env::args()
         .nth(2)
         .ok_or(anyhow!("Please specify a Telegram Channel"))?;
+    let wayback_machine_token = std::env::args().nth(3);
 
     let bot = tbot::Bot::new(token);
     let channel: ChatId = channel_id.as_str().into();
     let history = fs::read_to_string(HISTORY_FILE)?;
     let history: Vec<&str> = history.lines().collect();
     let pics = spider::do_the_evil().await?;
-    let mut new_history: Vec<Cow<str>> = Vec::with_capacity(HISTORY_SIZE);
+    let mut fresh_imgs: Vec<Cow<str>> = Vec::with_capacity(HISTORY_SIZE);
 
     for pic in pics.into_iter().filter(|pic| !history.contains(&&*pic.id)) {
         let spider::Pic {
@@ -70,7 +73,6 @@ async fn main() -> anyhow::Result<()> {
             images,
             comments,
         } = pic;
-
 
         for image in images {
             match async {
@@ -132,21 +134,23 @@ async fn main() -> anyhow::Result<()> {
             .web_page_preview(WebPagePreviewState::Disabled)
             .call()
             .await?;
-        new_history.push(id.into());
-        std::thread::sleep_ms(10000);
+        fresh_imgs.push(id.into());
+        // tokio::time::delay_for(Duration::from_secs(10)).await;
     }
-    new_history.extend(
-        history
-            .into_iter()
-            .map(Into::into)
-            .take(HISTORY_SIZE - new_history.len()),
-    );
+
     fs::write(
         HISTORY_FILE,
-        new_history
-            .into_iter()
+        fresh_imgs
+            .iter()
+            .map(|s| &**s)
+            .chain(history.into_iter())
+            .take(HISTORY_SIZE)
             .intersperse("\n".into())
             .collect::<String>(),
     )?;
+
+    if let Some(token) = wayback_machine_token {
+        wayback_machine::push(&token, &fresh_imgs).await?;
+    }
     Ok(())
 }

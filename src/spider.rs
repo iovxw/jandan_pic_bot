@@ -15,16 +15,16 @@ const TUCAO_API: &str = "http://jandan.net/tucao/";
 
 thread_local! {
     pub static CLIENT: reqwest::Client = {
-        let mut headers = header::HeaderMap::new();
+        let headers = header::HeaderMap::new();
         const USER_AGENT: &str = concat!(
             env!("CARGO_PKG_NAME"),
             "/",
             env!("CARGO_PKG_VERSION"),
             " (+https://t.me/jandan_pic)"
         );
-        headers.insert(header::USER_AGENT, header::HeaderValue::from_static(USER_AGENT));
         reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
+            .user_agent(header::HeaderValue::from_static(USER_AGENT))
             .default_headers(headers)
             .build()
             .unwrap()
