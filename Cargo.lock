@@ -713,7 +713,7 @@ dependencies = [
  "hyper-rustls 0.19.1",
  "rustls-native-certs",
  "tokio 0.2.24",
- "tokio-rustls 0.12.2",
+ "tokio-rustls 0.12.3",
  "tower-service",
  "typed-headers",
  "webpki",
@@ -732,7 +732,7 @@ dependencies = [
  "rustls 0.16.0",
  "rustls-native-certs",
  "tokio 0.2.24",
- "tokio-rustls 0.12.2",
+ "tokio-rustls 0.12.3",
  "webpki",
 ]
 
@@ -1818,7 +1818,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio 0.2.24",
- "tokio-rustls 0.12.2",
+ "tokio-rustls 0.12.3",
  "tracing",
  "tracing-futures",
 ]
@@ -1922,9 +1922,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-rustls"
-version = "0.12.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "141afec0978abae6573065a48882c6bae44c5cc61db9b511ac4abf6a09bfd9cc"
+checksum = "3068d891551949b37681724d6b73666787cc63fa8e255c812a41d2513aff9775"
 dependencies = [
  "futures-core",
  "rustls 0.16.0",
