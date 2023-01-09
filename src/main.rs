@@ -6,16 +6,12 @@ use std::fs;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use image::{self, GenericImageView};
+use image::GenericImageView;
 use log::error;
-use tbot::{
-    self,
-    types::{
-        input_file::{Animation, Photo},
-        parameters::{ChatId, Text},
-    },
+use tbot::types::{
+    input_file::{Animation, Photo},
+    parameters::{ChatId, Text},
 };
-use tokio;
 
 mod spider;
 mod wayback_machine;
@@ -26,7 +22,7 @@ const TG_IMAGE_SIZE_LIMIT: u32 = 1280;
 
 async fn download_image(url: &str) -> anyhow::Result<image::DynamicImage> {
     let buf = spider::CLIENT
-        .with(|client| client.get(url))
+        .with(|client| client.get(url).header("referer", "https://jandan.net/"))
         .send()
         .await?
         .error_for_status()?

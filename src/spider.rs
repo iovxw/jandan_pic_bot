@@ -1,11 +1,10 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use anyhow;
 use lazy_static::lazy_static;
 use marksman_escape::Unescape;
 use regex::Regex;
-use reqwest::{self, header};
+use reqwest::header;
 use scraper::Html;
 use serde::Deserialize;
 
