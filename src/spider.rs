@@ -53,7 +53,9 @@ pub struct Pic {
 struct TucaoResp {
     code: i32,
     hot_tucao: Vec<Tucao>,
+    #[allow(unused)]
     tucao: Vec<Tucao>,
+    #[allow(unused)]
     has_next_page: bool,
 }
 
