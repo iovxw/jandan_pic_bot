@@ -59,7 +59,7 @@ pub async fn push(token: &str, imgs: &[Cow<'_, str>]) -> anyhow::Result<()> {
         assert!(status.daily_captures < status.daily_captures_limit);
 
         while status.available == 0 {
-            tokio::time::sleep(Duration::from_secs(5)).await;
+            tokio::time::delay_for(Duration::from_secs(5)).await;
         }
 
         let req = client

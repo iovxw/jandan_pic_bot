@@ -105,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            tokio::time::delay_for(Duration::from_secs(3)).await;
         }
 
         let mut msg = format!(
