@@ -60,80 +60,9 @@ async fn main() -> anyhow::Result<()> {
     let mut fresh_imgs: Vec<Cow<str>> = Vec::with_capacity(HISTORY_SIZE);
 
     for pic in pics.into_iter().filter(|pic| !history.contains(&&*pic.id)) {
-        let spider::Pic {
-            author,
-            link: _link,
-            id,
-            oo,
-            xx,
-            text,
-            images,
-            comments,
-        } = pic;
+        send_pic(&bot, channel, &pic).await?;
 
-        for image in images {
-            match async {
-                if image.ends_with("gif") {
-                    bot.send_animation(channel, Animation::with_url(&image))
-                        .is_notification_disabled(true)
-                        .call()
-                        .await?;
-                } else {
-                    let img = download_image(&image).await?;
-                    let caption = format!("[查看大图]({})", image);
-                    let photo = if std::cmp::max(img.width(), img.height()) > TG_IMAGE_SIZE_LIMIT {
-                        Photo::with_url(&image).caption(Text::with_markdown(&caption))
-                    } else {
-                        Photo::with_url(&image)
-                    };
-                    bot.send_photo(channel, photo)
-                        .is_notification_disabled(true)
-                        .call()
-                        .await?;
-                }
-                Ok::<(), anyhow::Error>(())
-            }
-            .await
-            {
-                Ok(_) => {}
-                Err(e) => {
-                    error!("{}: {}", image, e);
-                    bot.send_message(channel, &image)
-                        .is_notification_disabled(true)
-                        .call()
-                        .await?;
-                }
-            }
-
-            tokio::time::delay_for(Duration::from_secs(3)).await;
-        }
-
-        let mut msg = format!(
-            "*{}*: https://jandan.net/t/{}\n",
-            &author.replace("*", ""),
-            &id,
-        );
-        if !text.is_empty() {
-            msg.push_str(&telegram_md_escape(&text));
-            msg.push('\n');
-        }
-        write!(msg, "*OO*: {} *XX*: {}", oo, xx).unwrap();
-        for comment in &comments {
-            write!(
-                msg,
-                "\n*{}*: {}\n*OO*: {}, *XX*: {}",
-                &comment.author.replace("*", ""),
-                telegram_md_escape(&comment.content),
-                comment.oo,
-                comment.xx
-            )
-            .unwrap();
-        }
-        bot.send_message(channel, Text::with_markdown(&msg))
-            .is_web_page_preview_disabled(true)
-            .call()
-            .await?;
-        fresh_imgs.push(id.into());
+        fresh_imgs.push(pic.id.into());
     }
 
     fs::write(
@@ -151,4 +80,75 @@ async fn main() -> anyhow::Result<()> {
         wayback_machine::push(&token, &fresh_imgs).await?;
     }
     Ok(())
+}
+
+async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> anyhow::Result<()> {
+    for img_url in &pic.images {
+        match async {
+            let img = download_image(&img_url).await?;
+            if img_url.ends_with("gif") {
+                bot.send_animation(target, Animation::with_url(&img_url))
+                    .is_notification_disabled(true)
+                    .call()
+                    .await?;
+            } else {
+                let caption = format!("[查看大图]({})", img_url);
+                let photo = if std::cmp::max(img.width(), img.height()) > TG_IMAGE_SIZE_LIMIT {
+                    Photo::with_url(&img_url).caption(Text::with_markdown(&caption))
+                } else {
+                    Photo::with_url(&img_url)
+                };
+                bot.send_photo(target, photo)
+                    .is_notification_disabled(true)
+                    .call()
+                    .await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                error!("{}: {}", img_url, e);
+                bot.send_message(target, img_url)
+                    .is_notification_disabled(true)
+                    .call()
+                    .await?;
+            }
+        }
+
+        tokio::time::delay_for(Duration::from_secs(3)).await;
+    }
+
+    let caption = format_caption(pic);
+    bot.send_message(target, Text::with_markdown(&caption))
+        .is_web_page_preview_disabled(true)
+        .call()
+        .await?;
+    Ok(())
+}
+
+fn format_caption(pic: &spider::Pic) -> String {
+    let mut msg = format!(
+        "*{}*: https://jandan.net/t/{}\n",
+        pic.author.replace("*", ""),
+        pic.id,
+    );
+    if !pic.text.is_empty() {
+        msg.push_str(&telegram_md_escape(&pic.text));
+        msg.push('\n');
+    }
+    write!(msg, "*OO*: {} *XX*: {}", pic.oo, pic.xx).unwrap();
+    for comment in &pic.comments {
+        write!(
+            msg,
+            "\n*{}*: {}\n*OO*: {}, *XX*: {}",
+            &comment.author.replace("*", ""),
+            telegram_md_escape(&comment.content),
+            comment.oo,
+            comment.xx
+        )
+        .unwrap();
+    }
+    msg
 }
