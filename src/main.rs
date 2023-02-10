@@ -3,16 +3,16 @@
 use std::borrow::Cow;
 use std::fmt::Write;
 use std::fs;
+use std::io::Cursor;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use image::GenericImageView;
+use futures::prelude::*;
 use log::error;
 use tbot::types::{
-    input_file::{Animation, Photo},
+    input_file::{Animation, Document, Photo},
     parameters::{ChatId, Text},
 };
-
 mod spider;
 mod wayback_machine;
 
@@ -20,7 +20,28 @@ const HISTORY_SIZE: usize = 100;
 const HISTORY_FILE: &str = "history.text";
 const TG_IMAGE_SIZE_LIMIT: u32 = 1280;
 
-async fn download_image(url: &str) -> anyhow::Result<image::DynamicImage> {
+struct Image {
+    format: image::ImageFormat,
+    name: String,
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
+}
+
+impl Image {
+    fn is_gif(&self) -> bool {
+        matches!(self.format, image::ImageFormat::Gif)
+    }
+}
+
+async fn download_image(url: &str) -> anyhow::Result<Image> {
+    let url = reqwest::Url::parse(url)?;
+    let name = url
+        .path_segments()
+        .map(|s| s.last())
+        .flatten()
+        .unwrap_or_default()
+        .into();
     let buf = spider::CLIENT
         .with(|client| client.get(url).header("referer", "https://jandan.net/"))
         .send()
@@ -28,8 +49,20 @@ async fn download_image(url: &str) -> anyhow::Result<image::DynamicImage> {
         .error_for_status()?
         .bytes()
         .await?;
-    let img = image::load_from_memory(&buf)?;
-    Ok(img)
+    let reader = image::io::Reader::new(Cursor::new(&buf))
+        .with_guessed_format()
+        .expect("io read error in Cursor<Vec>?");
+    let format = reader.format().ok_or_else(|| {
+        image::ImageError::Unsupported(image::error::ImageFormatHint::Unknown.into())
+    })?;
+    let dimensions = reader.into_dimensions()?;
+    Ok(Image {
+        format,
+        name,
+        width: dimensions.0,
+        height: dimensions.1,
+        data: buf.to_vec(),
+    })
 }
 
 // TODO: CoW
@@ -83,34 +116,42 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> anyhow::Result<()> {
-    for img_url in &pic.images {
-        match async {
-            let img = download_image(&img_url).await?;
-            if img_url.ends_with("gif") {
-                bot.send_animation(target, Animation::with_url(&img_url))
-                    .is_notification_disabled(true)
-                    .call()
-                    .await?;
-            } else {
-                let caption = format!("[查看大图]({})", img_url);
-                let photo = if std::cmp::max(img.width(), img.height()) > TG_IMAGE_SIZE_LIMIT {
-                    Photo::with_url(&img_url).caption(Text::with_markdown(&caption))
-                } else {
-                    Photo::with_url(&img_url)
-                };
-                bot.send_photo(target, photo)
-                    .is_notification_disabled(true)
-                    .call()
-                    .await?;
+    let images: Vec<_> = futures::stream::iter(&pic.images)
+        .then(|url| async move {
+            match download_image(url).await {
+                Ok(r) => Ok(r),
+                Err(e) => Err((e, url)),
             }
-            Ok::<(), anyhow::Error>(())
-        }
-        .await
-        {
-            Ok(_) => {}
-            Err(e) => {
+        })
+        .collect()
+        .await;
+    for img_result in &images {
+        match img_result {
+            Ok(img) => {
+                if img.is_gif() {
+                    bot.send_animation(target, Animation::with_bytes(&img.data))
+                        .is_notification_disabled(true)
+                        .call()
+                        .await?;
+                } else {
+                    if std::cmp::max(img.width, img.height) > TG_IMAGE_SIZE_LIMIT {
+                        bot.send_document(target, Document::with_bytes(&img.name, &img.data))
+                            .is_notification_disabled(true)
+                            .call()
+                            .await?;
+                    } else {
+                        let p = Photo::with_bytes(&img.data);
+
+                        bot.send_photo(target, p)
+                            .is_notification_disabled(true)
+                            .call()
+                            .await?;
+                    };
+                }
+            }
+            Err((e, img_url)) => {
                 error!("{}: {}", img_url, e);
-                bot.send_message(target, img_url)
+                bot.send_message(target, *img_url)
                     .is_notification_disabled(true)
                     .call()
                     .await?;
