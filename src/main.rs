@@ -7,12 +7,15 @@ use std::io::Cursor;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use convert::video_to_mp4;
 use futures::prelude::*;
 use log::error;
 use tbot::types::{
-    input_file::{Animation, Document, Photo},
+    input_file::{Document, Photo, Video},
     parameters::{ChatId, Text},
 };
+
+mod convert;
 mod spider;
 mod wayback_machine;
 
@@ -125,11 +128,12 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
         })
         .collect()
         .await;
-    for img_result in &images {
+    for img_result in images {
         match img_result {
             Ok(img) => {
                 if img.is_gif() {
-                    bot.send_animation(target, Animation::with_bytes(&img.data))
+                    let mp4 = video_to_mp4(img.data)?;
+                    bot.send_video(target, Video::with_bytes(&mp4))
                         .is_notification_disabled(true)
                         .call()
                         .await?;
@@ -151,7 +155,7 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
             }
             Err((e, img_url)) => {
                 error!("{}: {}", img_url, e);
-                bot.send_message(target, *img_url)
+                bot.send_message(target, &*img_url)
                     .is_notification_disabled(true)
                     .call()
                     .await?;
