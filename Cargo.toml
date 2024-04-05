@@ -16,7 +16,7 @@ scraper = "0.12"
 marksman_escape= "0.1"
 serde = { version = "1.0", features = ["derive"] }
 image = "0.23.14"
-rsmpeg = "0.14.2"
+rsmpeg = { version = "0.14.2", features = ["link_system_ffmpeg"] }
 
 [dependencies.tbot]
 version = "0.6"
