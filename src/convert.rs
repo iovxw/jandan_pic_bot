@@ -1,6 +1,4 @@
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
@@ -73,42 +71,77 @@ fn decode_video(input_format_context: AVFormatContextInput) -> Result<AVFrameIte
     })
 }
 
-fn input_format_context(data: Vec<u8>) -> Result<AVFormatContextInput> {
-    let cur1 = Arc::new(AtomicUsize::new(0));
-    let cur2 = cur1.clone();
+#[allow(clippy::type_complexity)]
+fn io_context_custom(
+    data: Vec<u8>,
+    write: bool,
+) -> Result<(AVIOContextCustom, Arc<Mutex<Cursor<Vec<u8>>>>)> {
+    let data = Arc::new(Mutex::new(Cursor::new(data)));
 
-    let io_context = AVIOContextCustom::alloc_context(
-        AVMem::new(4096),
-        false,
-        data,
-        Some(Box::new(move |data, buf| {
-            let cur = cur1.load(Relaxed);
-            if data.len() <= cur {
-                return ffi::AVERROR_EOF;
-            }
-            let ret = (&data[cur..]).read(buf).unwrap();
-            cur1.store(cur + ret, Relaxed);
-            ret as i32
-        })),
-        None,
-        Some(Box::new(move |data, offset, whence| {
-            let cur = cur2.load(Relaxed) as i64;
+    let seek = {
+        let data = data.clone();
+        Box::new(move |_: &mut Vec<u8>, offset: i64, whence: i32| {
+            let mut data = data.lock().unwrap();
             const AVSEEK_SIZE: i32 = ffi::AVSEEK_SIZE as i32;
-            let new = match whence {
-                0 => offset,
-                1 => cur + offset,
-                2 => data.len() as i64 + offset,
-                AVSEEK_SIZE => return data.len() as i64,
-                _ => -1,
-            };
-
-            if new >= 0 {
-                cur2.store(new as usize, Relaxed);
+            match whence {
+                0 => data.seek(SeekFrom::Start(offset as _)),
+                1 => data.seek(SeekFrom::Current(offset)),
+                2 => data.seek(SeekFrom::End(offset)),
+                AVSEEK_SIZE => return data.get_ref().len() as _,
+                _ => return -1,
             }
-            new
-        })),
-    );
+            .map(|x| x as _)
+            .unwrap_or(-1)
+        })
+    };
 
+    let io_context = if write {
+        let write_packet = {
+            let data = data.clone();
+            Box::new(
+                move |_: &mut Vec<u8>, buf: &[u8]| match data.lock().unwrap().write_all(buf) {
+                    Ok(_) => buf.len() as _,
+                    Err(_) => -1,
+                },
+            )
+        };
+
+        AVIOContextCustom::alloc_context(
+            AVMem::new(4096),
+            true,
+            Vec::new(),
+            None,
+            Some(write_packet),
+            Some(seek),
+        )
+    } else {
+        let read_packet = {
+            let data = data.clone();
+            Box::new(move |_: &mut Vec<u8>, buf: &mut [u8]| {
+                let mut data = data.lock().unwrap();
+                match data.read(buf) {
+                    Ok(0) => ffi::AVERROR_EOF,
+                    Ok(n) => n as _,
+                    Err(_) => -1,
+                }
+            })
+        };
+
+        AVIOContextCustom::alloc_context(
+            AVMem::new(4096),
+            false,
+            Vec::new(),
+            Some(read_packet),
+            None,
+            Some(seek),
+        )
+    };
+
+    Ok((io_context, data))
+}
+
+fn input_format_context(data: Vec<u8>) -> Result<AVFormatContextInput> {
+    let (io_context, _) = io_context_custom(data, false)?;
     let input_format_context =
         AVFormatContextInput::from_io_context(AVIOContextContainer::Custom(io_context))?;
 
@@ -117,42 +150,11 @@ fn input_format_context(data: Vec<u8>) -> Result<AVFormatContextInput> {
 
 #[allow(clippy::type_complexity)]
 fn output_format_context() -> Result<(AVFormatContextOutput, Arc<Mutex<Cursor<Vec<u8>>>>)> {
-    let buffer = Arc::new(Mutex::new(Cursor::new(Vec::new())));
-    let buffer1 = buffer.clone();
-    let buffer2 = buffer.clone();
-
-    let io_context = AVIOContextCustom::alloc_context(
-        AVMem::new(4096),
-        true,
-        Vec::new(),
-        None,
-        Some(Box::new(move |_, buf: &[u8]| {
-            let mut buffer = buffer1.lock().unwrap();
-            if buffer.write_all(buf).is_err() {
-                return -1;
-            };
-            buf.len() as _
-        })),
-        Some(Box::new(move |_, offset: i64, whence: i32| {
-            let mut buffer = match buffer2.lock() {
-                Ok(x) => x,
-                Err(_) => return -1,
-            };
-            match whence {
-                0 => buffer.seek(SeekFrom::Start(offset as _)),
-                1 => buffer.seek(SeekFrom::Current(offset)),
-                2 => buffer.seek(SeekFrom::End(offset)),
-                _ => return -1,
-            }
-            .map(|x| x as _)
-            .unwrap_or(-1)
-        })),
-    );
-
+    let (io_context, data) = io_context_custom(Vec::new(), true)?;
     let output_format_context =
         AVFormatContextOutput::create(c".mp4", Some(AVIOContextContainer::Custom(io_context)))?;
 
-    Ok((output_format_context, buffer))
+    Ok((output_format_context, data))
 }
 
 fn encode_mp4(mut src: AVFrameIter) -> Result<Vec<u8>> {
@@ -168,25 +170,20 @@ fn encode_mp4(mut src: AVFrameIter) -> Result<Vec<u8>> {
         let encoder =
             AVCodec::find_encoder_by_name(c"libx264").context("Failed to find encoder codec")?;
         let mut encode_context = AVCodecContext::new(&encoder);
-        encode_context.set_bit_rate(1000000);
         encode_context.set_width(width);
         encode_context.set_height(height);
         encode_context.set_time_base(time_base);
         encode_context.set_framerate(framerate);
-        encode_context.set_gop_size(10);
-        encode_context.set_max_b_frames(1);
         encode_context.set_pix_fmt(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P);
-        if encoder.id == ffi::AVCodecID_AV_CODEC_ID_H264 {
-            unsafe {
-                if ffi::av_opt_set(
-                    encode_context.priv_data,
-                    c"preset".as_ptr(),
-                    c"slow".as_ptr(),
-                    0,
-                ) < 0
-                {
-                    bail!("Failed to set preset");
-                }
+        unsafe {
+            if ffi::av_opt_set(
+                encode_context.priv_data,
+                c"preset".as_ptr(),
+                c"slow".as_ptr(),
+                0,
+            ) < 0
+            {
+                bail!("Failed to set preset");
             }
         }
         if output_format_context.oformat().flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
