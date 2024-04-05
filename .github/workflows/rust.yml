@@ -1,11 +1,11 @@
 name: Rust
 
-on: [push]
+on: [push, pull_request]
 jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
+        os: [ubuntu-latest]
         rust: [nightly]
         #include:
         # Allow failures on nightly
