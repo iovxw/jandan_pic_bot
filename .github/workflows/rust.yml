@@ -18,6 +18,17 @@ jobs:
       with:
         rust-version: ${{ matrix.rust }}
     - uses: actions/checkout@master
+    - name: Install FFmpeg
+      run: |
+        sudo apt-get update -qq && sudo apt-get -y install \
+          libavcodec-dev \
+          libavdevice-dev \
+          libavfilter-dev \
+          libavformat-dev \
+          libavutil-dev \
+          libpostproc-dev \
+          libswresample-dev \
+          libswscale-dev
     - name: Run tests
       run: cargo test --verbose
       #continue-on-error: ${{ matrix.can-fail }}
