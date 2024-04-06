@@ -69,12 +69,13 @@ struct Tucao {
 
 fn unescape_comment(s: &str) -> Cow<str> {
     lazy_static! {
-        static ref RULES: [(Regex, &'static str); 2] = [
+        static ref RULES: [(Regex, &'static str); 3] = [
             (
                 Regex::new(r#"<img src="(?P<img>[^"]+)" />"#).unwrap(),
                 "$img"
             ),
-            (Regex::new(r#"<a[^>]*>(?P<at>[^<]*)</a>"#).unwrap(), "$at")
+            (Regex::new(r#"<a[^>]*>(?P<at>[^<]*)</a>"#).unwrap(), "$at"),
+            (Regex::new("<br>").unwrap(), "\n")
         ];
     }
 
