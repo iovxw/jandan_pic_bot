@@ -1,4 +1,5 @@
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
@@ -162,19 +163,26 @@ fn encode_mp4(mut src: AVFrameIter) -> Result<Vec<u8>> {
         let time_base = src.decode_context.time_base;
         let framerate = src.decode_context.framerate;
         let first_frame = src.next_frame()?.context("Failed to get first frame")?;
-        let width = first_frame.width;
-        let height = first_frame.height;
+        let &ffi::AVFrame {
+            width: src_width,
+            height: src_height,
+            format: src_format,
+            ..
+        } = (*first_frame).deref();
+        let dst_width = src_width + src_width % 2;
+        let dst_height = src_height + src_height % 2;
+        let dst_format = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
 
         let (mut output_format_context, buffer) = output_format_context()?;
 
         let encoder =
             AVCodec::find_encoder_by_name(c"libx264").context("Failed to find encoder codec")?;
         let mut encode_context = AVCodecContext::new(&encoder);
-        encode_context.set_width(width);
-        encode_context.set_height(height);
+        encode_context.set_width(dst_width);
+        encode_context.set_height(dst_height);
+        encode_context.set_pix_fmt(dst_format);
         encode_context.set_time_base(time_base);
         encode_context.set_framerate(framerate);
-        encode_context.set_pix_fmt(ffi::AVPixelFormat_AV_PIX_FMT_YUV420P);
         unsafe {
             if ffi::av_opt_set(
                 encode_context.priv_data,
@@ -193,9 +201,9 @@ fn encode_mp4(mut src: AVFrameIter) -> Result<Vec<u8>> {
         encode_context.open(None)?;
 
         let mut dst_frame = AVFrame::new();
-        dst_frame.set_format(encode_context.pix_fmt);
-        dst_frame.set_width(encode_context.width);
-        dst_frame.set_height(encode_context.height);
+        dst_frame.set_width(dst_width);
+        dst_frame.set_height(dst_height);
+        dst_frame.set_format(dst_format);
         dst_frame.alloc_buffer()?;
 
         {
@@ -205,23 +213,31 @@ fn encode_mp4(mut src: AVFrameIter) -> Result<Vec<u8>> {
 
         output_format_context.write_header(&mut None)?;
 
-        let mut sws_context = SwsContext::get_context(
-            width,
-            height,
-            first_frame.format,
-            width,
-            height,
-            encode_context.pix_fmt,
-            ffi::SWS_FAST_BILINEAR | ffi::SWS_ACCURATE_RND,
-        )
-        .context("Failed to get sws_context")?;
-        let mut encode_frame = |src_frame: &mut AVFrame| -> Result<()> {
-            let frame_after = if src_frame.format == dst_frame.format {
-                src_frame
+        let mut sws_context =
+            if src_format != dst_frame.format || src_width != dst_width || src_height != dst_height
+            {
+                let sws_context = SwsContext::get_context(
+                    src_width,
+                    src_height,
+                    src_format,
+                    dst_width,
+                    dst_height,
+                    dst_format,
+                    ffi::SWS_FAST_BILINEAR | ffi::SWS_ACCURATE_RND,
+                )
+                .context("Failed to get sws_context")?;
+                Some(sws_context)
             } else {
-                sws_context.scale_frame(src_frame, 0, height, &mut dst_frame)?;
+                None
+            };
+
+        let mut encode_frame = |src_frame: &mut AVFrame| -> Result<()> {
+            let frame_after = if let Some(sws_context) = sws_context.as_mut() {
+                sws_context.scale_frame(src_frame, 0, src_height, &mut dst_frame)?;
                 dst_frame.set_pts(src_frame.pts);
                 &mut dst_frame
+            } else {
+                src_frame
             };
 
             encode_write_frame(
