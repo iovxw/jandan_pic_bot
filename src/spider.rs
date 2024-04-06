@@ -69,48 +69,24 @@ struct Tucao {
 
 fn unescape_comment(s: &str) -> Cow<str> {
     lazy_static! {
-        static ref IMG: Regex = Regex::new(r#"<img src="(?P<img>[^"]+)" />"#).unwrap();
-        static ref AT: Regex = Regex::new(r#"<a[^>]*>(?P<at>[^<]*)</a>"#).unwrap();
+        static ref RULES: [(Regex, &'static str); 2] = [
+            (
+                Regex::new(r#"<img src="(?P<img>[^"]+)" />"#).unwrap(),
+                "$img"
+            ),
+            (Regex::new(r#"<a[^>]*>(?P<at>[^<]*)</a>"#).unwrap(), "$at")
+        ];
     }
 
-    /// Compare two string, if not equal, return the second
-    fn cow_cmp_str<T: Iterator<Item = u8>>(s: &str, mut other: T) -> Cow<str> {
-        let s_bytes = s.as_bytes();
-        let mut owned = Vec::new();
-        let mut index = (0..).into_iter();
-        while let (Some(byte), i) = (other.next(), index.next().unwrap()) {
-            if s_bytes.get(i).is_none() || s_bytes[i] != byte {
-                owned.extend(&s_bytes[0..i]);
-                owned.extend(other);
-                break;
-            }
-        }
-        let other_len = index.next().unwrap();
-        if !owned.is_empty() {
-            Cow::Owned(String::from_utf8(owned).unwrap())
-        } else if s.len() > other_len {
-            // Should this be owned?
-            Cow::Owned(s[..other_len].to_owned())
-        } else {
-            Cow::Borrowed(s)
+    let mut s = Cow::Borrowed(s.trim());
+    for (r, rep) in RULES.iter() {
+        // When a Cow::Borrowed is returned, the value returned is guaranteed
+        // to be equivalent to the haystack given.
+        if let Cow::Owned(ss) = r.replace_all(&s, *rep) {
+            s = Cow::Owned(ss)
         }
     }
-
-    let s0 = s.trim();
-    let s1 = IMG.replace_all(s0, "$img");
-    let s2 = AT.replace_all(&s1, "$at");
-    let s3 = cow_cmp_str(&s2, Unescape::new(s2.as_bytes().iter().copied()));
-    if let Cow::Owned(s) = s3 {
-        return Cow::Owned(s);
-    } else if let Cow::Owned(s) = s2 {
-        return Cow::Owned(s);
-    } else if let Cow::Owned(s) = s1 {
-        return Cow::Owned(s);
-    } else if s0.len() != s.len() {
-        Cow::Owned(s0.to_owned())
-    } else {
-        Cow::Borrowed(s)
-    }
+    s
 }
 
 fn fix_scheme(s: &str) -> Cow<str> {
