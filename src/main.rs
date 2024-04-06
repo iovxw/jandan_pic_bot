@@ -21,7 +21,8 @@ mod wayback_machine;
 
 const HISTORY_SIZE: usize = 100;
 const HISTORY_FILE: &str = "history.text";
-const TG_IMAGE_SIZE_LIMIT: u32 = 1280;
+const TG_IMAGE_DIMENSION_LIMIT: u32 = 1280;
+const LOW_QUALITY_IMG_SIZE: usize = 200 * 1024;
 
 struct Image {
     format: image::ImageFormat,
@@ -138,7 +139,7 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
                         .call()
                         .await?;
                 } else {
-                    if std::cmp::max(img.width, img.height) > TG_IMAGE_SIZE_LIMIT {
+                    if image_too_large(&img) {
                         bot.send_document(target, Document::with_bytes(&img.name, &img.data))
                             .is_notification_disabled(true)
                             .call()
@@ -171,6 +172,11 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
         .call()
         .await?;
     Ok(())
+}
+
+fn image_too_large(img: &Image) -> bool {
+    std::cmp::max(img.width, img.height) > TG_IMAGE_DIMENSION_LIMIT
+        && img.data.len() > LOW_QUALITY_IMG_SIZE
 }
 
 fn format_caption(pic: &spider::Pic) -> String {
