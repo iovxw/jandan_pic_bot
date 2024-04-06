@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
@@ -31,10 +32,12 @@ thread_local! {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
+    pub id: u64,
     pub author: String,
     pub oo: u32,
     pub xx: u32,
     pub content: String,
+    pub mentions: Vec<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -46,7 +49,7 @@ pub struct Pic {
     pub xx: u32,
     pub text: String,
     pub images: Vec<String>,
-    pub comments: Vec<Comment>,
+    pub comments: Comments,
 }
 
 #[derive(Deserialize, Debug)]
@@ -61,6 +64,8 @@ struct TucaoResp {
 
 #[derive(Deserialize, Debug)]
 struct Tucao {
+    #[serde(rename = "comment_ID")]
+    comment_id: u64,
     comment_author: String,
     comment_content: String,
     vote_positive: u32,
@@ -101,7 +106,39 @@ fn fix_scheme(s: &str) -> Cow<str> {
     }
 }
 
-async fn get_comments(id: &str) -> anyhow::Result<Vec<Comment>> {
+fn extract_mentions(comment: &str) -> Vec<u64> {
+    lazy_static! {
+        // <a href="#tucao-12116426" data-id="12116426" class="tucao-link">
+        static ref MENTIONS: Regex = Regex::new(r#"<a .*data-id="(?P<id>\d+)".*>"#).unwrap();
+    }
+    MENTIONS
+        .captures_iter(comment)
+        .map(|c| c.name("id").expect("bug in regex").as_str())
+        .map(|id| id.parse::<u64>().expect("tucao ID format changed"))
+        .collect()
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Comments {
+    pub hot: Vec<Comment>,
+    pub extra: Vec<Comment>,
+}
+
+impl From<Tucao> for Comment {
+    fn from(tucao: Tucao) -> Self {
+        let mentions = extract_mentions(&tucao.comment_content);
+        Comment {
+            id: tucao.comment_id,
+            author: tucao.comment_author,
+            oo: tucao.vote_positive,
+            xx: tucao.vote_negative,
+            content: unescape_comment(&tucao.comment_content).into_owned(),
+            mentions,
+        }
+    }
+}
+
+async fn get_comments(id: &str) -> anyhow::Result<Comments> {
     let url = format!("{}{}", TUCAO_API, id);
 
     let resp = CLIENT
@@ -113,17 +150,20 @@ async fn get_comments(id: &str) -> anyhow::Result<Vec<Comment>> {
         .await?;
     assert_eq!(resp.code, 0);
 
-    resp.hot_tucao
-        .into_iter()
-        .map(|tucao| {
-            Ok(Comment {
-                author: tucao.comment_author,
-                oo: tucao.vote_positive,
-                xx: tucao.vote_negative,
-                content: unescape_comment(&tucao.comment_content).into_owned(),
-            })
-        })
-        .collect::<Result<_, _>>()
+    let mut tucao: HashMap<u64, Tucao> =
+        HashMap::from_iter(resp.tucao.into_iter().map(|c| (c.comment_id, c)));
+
+    let hot: Vec<Comment> = resp.hot_tucao.into_iter().map(|c| c.into()).collect();
+    let extra = hot
+        .iter()
+        .map(|comment| &comment.mentions)
+        .flatten()
+        .filter(|&&mention_id| !hot.iter().any(|comment| comment.id == mention_id))
+        .map(|mention_id| tucao.remove(&mention_id))
+        .filter_map(|c| c)
+        .map(|c| c.into())
+        .collect();
+    Ok(Comments { hot, extra })
 }
 
 macro_rules! pos {

@@ -190,7 +190,7 @@ fn format_caption(pic: &spider::Pic) -> String {
         msg.push('\n');
     }
     write!(msg, "*OO*: {} *XX*: {}", pic.oo, pic.xx).unwrap();
-    for comment in &pic.comments {
+    for comment in &pic.comments.hot {
         write!(
             msg,
             "\n*{}*: {}\n*OO*: {}, *XX*: {}",
