@@ -72,9 +72,6 @@ pub async fn push(token: &str, imgs: &[Cow<'_, str>]) -> anyhow::Result<()> {
                 skip_first_archive: true,
             })
             .build()?;
-        dbg!(String::from_utf8_lossy(
-            req.body().unwrap().as_bytes().unwrap()
-        ));
 
         client.execute(req).await?;
     }
