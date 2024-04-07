@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -72,7 +73,7 @@ struct Tucao {
     vote_negative: u32,
 }
 
-fn unescape_comment(s: &str) -> Cow<str> {
+fn unescape_comment(s: &str) -> String {
     lazy_static! {
         static ref RULES: [(Regex, &'static str); 3] = [
             (
@@ -92,7 +93,7 @@ fn unescape_comment(s: &str) -> Cow<str> {
             s = Cow::Owned(ss)
         }
     }
-    s
+    String::from_utf8(Unescape::new(s.bytes()).collect()).unwrap()
 }
 
 fn fix_scheme(s: &str) -> Cow<str> {
@@ -132,7 +133,7 @@ impl From<Tucao> for Comment {
             author: tucao.comment_author,
             oo: tucao.vote_positive,
             xx: tucao.vote_negative,
-            content: unescape_comment(&tucao.comment_content).into_owned(),
+            content: unescape_comment(&tucao.comment_content),
             mentions,
         }
     }
