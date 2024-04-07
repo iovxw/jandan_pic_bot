@@ -11,7 +11,7 @@ use convert::video_to_mp4;
 use futures::prelude::*;
 use log::error;
 use tbot::types::{
-    input_file::{Document, Photo, Video},
+    input_file::{Document, GroupMedia, Photo, Video},
     parameters::{ChatId, Text},
 };
 
@@ -120,15 +120,135 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> anyhow::Result<()> {
-    let images: Vec<_> = futures::stream::iter(&pic.images)
+    let images: Vec<Result<Image, (_, &str)>> = futures::stream::iter(&pic.images)
         .then(|url| async move {
             match download_image(url).await {
                 Ok(r) => Ok(r),
-                Err(e) => Err((e, url)),
+                Err(e) => Err((e, url.as_str())),
             }
         })
         .collect()
         .await;
+    let caption = format_caption(pic);
+    let caption = Text::with_markdown(&caption);
+    let contains_error = images.iter().any(|r| r.is_err());
+    let contains_large_image = images
+        .iter()
+        .filter_map(|r| r.as_ref().ok())
+        .any(|img| image_too_large(img));
+    let contains_gif = images
+        .iter()
+        .filter_map(|r| r.as_ref().ok())
+        .any(|img| img.is_gif());
+    if images.is_empty() || contains_error || contains_large_image && contains_gif {
+        send_the_old_way(bot, target, images, caption).await?;
+        return Ok(());
+    }
+    assert!(!images.is_empty());
+    if contains_large_image {
+        assert!(!contains_gif);
+        // TODO: replace with:
+        // send_as_document_group(bot, target, images, caption).await?;
+        if images.len() == 1 {
+            let img: Image = images.into_iter().find_map(|x| x.ok()).unwrap();
+            let doc = Document::with_bytes(&img.name, &img.data).caption(caption);
+            bot.send_document(target, doc)
+                .is_notification_disabled(true)
+                .call()
+                .await?;
+        } else {
+            send_the_old_way(bot, target, images, caption).await?;
+        }
+    } else {
+        let images: Vec<Image> = images
+            .into_iter()
+            .map(|r| r.expect("error not filtered out, check the logic"))
+            .collect();
+
+        send_as_photo_group(bot, target, images, caption).await?;
+    }
+    Ok(())
+}
+
+async fn send_as_document_group(
+    bot: &tbot::Bot,
+    target: ChatId<'_>,
+    images: Vec<Image>,
+    caption: Text<'_>,
+) -> anyhow::Result<()> {
+    assert!(!images.is_empty());
+    let mut first = true;
+    let group: Vec<GroupMedia> = images
+        .iter()
+        .map(|img| {
+            if first {
+                first = false;
+                let doc = Document::with_bytes(&img.name, &img.data).caption(caption);
+                todo!("tbot doesn't support ducoment as group")
+            } else {
+                let doc = Document::with_bytes(&img.name, &img.data);
+                todo!("tbot doesn't support ducoment as group")
+            }
+        })
+        .collect();
+    bot.send_media_group(target, &group)
+        .is_notification_disabled(true)
+        .call()
+        .await?;
+
+    Ok(())
+}
+
+async fn send_as_photo_group(
+    bot: &tbot::Bot,
+    target: ChatId<'_>,
+    images: Vec<Image>,
+    caption: Text<'_>,
+) -> anyhow::Result<()> {
+    assert!(!images.is_empty());
+    enum Or {
+        Video(Vec<u8>),
+        Photo(Vec<u8>),
+    }
+    let data: Vec<_> = images
+        .into_iter()
+        .map(|img| {
+            if img.is_gif() {
+                video_to_mp4(img.data).map(Or::Video)
+            } else {
+                Ok(Or::Photo(img.data))
+            }
+        })
+        .collect::<Result<_, _>>()?;
+    let mut first = true;
+    let group: Vec<GroupMedia> = data
+        .iter()
+        .map(|d| match (d, first) {
+            (Or::Video(v), true) => {
+                first = false;
+                Video::with_bytes(v).caption(caption).into()
+            }
+            (Or::Photo(p), true) => {
+                first = false;
+                Photo::with_bytes(p).caption(caption).into()
+            }
+            (Or::Video(v), false) => Video::with_bytes(v).into(),
+            (Or::Photo(p), false) => Photo::with_bytes(p).into(),
+        })
+        .collect();
+    bot.send_media_group(target, &group)
+        .is_notification_disabled(true)
+        .call()
+        .await?;
+    Ok(())
+}
+
+async fn send_the_old_way(
+    bot: &tbot::Bot,
+    target: ChatId<'_>,
+    images: Vec<Result<Image, (anyhow::Error, &'_ str)>>,
+    caption: Text<'_>,
+) -> anyhow::Result<()> {
     for img_result in images {
         match img_result {
             Ok(img) => {
@@ -165,9 +285,7 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
 
         tokio::time::delay_for(Duration::from_secs(3)).await;
     }
-
-    let caption = format_caption(pic);
-    bot.send_message(target, Text::with_markdown(&caption))
+    bot.send_message(target, caption)
         .is_web_page_preview_disabled(true)
         .call()
         .await?;
