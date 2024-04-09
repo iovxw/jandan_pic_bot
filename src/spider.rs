@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -68,12 +67,22 @@ struct Tucao {
     #[serde(rename = "comment_ID")]
     comment_id: u64,
     comment_author: String,
+    #[serde(deserialize_with = "deserialize_comment_with_unescape")]
     comment_content: String,
     vote_positive: u32,
     vote_negative: u32,
 }
 
-fn unescape_comment(s: &str) -> String {
+fn deserialize_comment_with_unescape<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: &[u8] = <&[u8]>::deserialize(deserializer)?;
+    String::from_utf8(Unescape::new(s.iter().cloned()).collect::<Vec<u8>>())
+        .map_err(|e| serde::de::Error::custom(e))
+}
+
+fn unescape_comment(s: String) -> String {
     lazy_static! {
         static ref RULES: [(Regex, &'static str); 3] = [
             (
@@ -85,7 +94,7 @@ fn unescape_comment(s: &str) -> String {
         ];
     }
 
-    let mut s = Cow::Borrowed(s.trim());
+    let mut s = Cow::Owned(s);
     for (r, rep) in RULES.iter() {
         // When a Cow::Borrowed is returned, the value returned is guaranteed
         // to be equivalent to the haystack given.
@@ -93,7 +102,7 @@ fn unescape_comment(s: &str) -> String {
             s = Cow::Owned(ss)
         }
     }
-    String::from_utf8(Unescape::new(s.bytes()).collect()).unwrap()
+    s.into_owned()
 }
 
 fn fix_scheme(s: &str) -> Cow<str> {
@@ -133,7 +142,7 @@ impl From<Tucao> for Comment {
             author: tucao.comment_author,
             oo: tucao.vote_positive,
             xx: tucao.vote_negative,
-            content: unescape_comment(&tucao.comment_content),
+            content: unescape_comment(tucao.comment_content),
             mentions,
         }
     }
@@ -281,7 +290,7 @@ mod test {
     #[test]
     fn unescape() {
         let s = r##"<a href=\"#tucao-6023158\" data-id=\"6023158\" class=\"tucao-link\">@name</a> COMMENT"##;
-        let r = unescape_comment(s);
+        let r = unescape_comment(s.to_string());
         assert_eq!(&*r, "@name COMMENT")
     }
 }
