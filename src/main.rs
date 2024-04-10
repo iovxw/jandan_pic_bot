@@ -362,7 +362,7 @@ fn format_caption(pic: &spider::Pic) -> Vec<String> {
             comment.oo,
             comment.xx
         );
-        if msg.len() + formatted.len() > TG_CAPTION_LIMIT {
+        if msg.chars().count() + formatted.chars().count() > TG_CAPTION_LIMIT {
             msgs.push(formatted);
         } else {
             msg.push_str(&formatted);
