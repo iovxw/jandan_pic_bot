@@ -78,8 +78,11 @@ fn deserialize_comment_with_unescape<'de, D>(deserializer: D) -> Result<String, 
 where
     D: serde::Deserializer<'de>,
 {
-    let s: &[u8] = <&[u8]>::deserialize(deserializer)?;
-    String::from_utf8(Unescape::new(s.iter().cloned()).collect::<Vec<u8>>())
+    // https://github.com/serde-rs/serde/issues/1852
+    #[derive(Deserialize)]
+    struct BorrowCow<'a>(#[serde(borrow)] Cow<'a, str>);
+    let s = BorrowCow::deserialize(deserializer)?.0;
+    String::from_utf8(Unescape::new(s.bytes()).collect::<Vec<u8>>())
         .map_err(|e| serde::de::Error::custom(e))
 }
 
