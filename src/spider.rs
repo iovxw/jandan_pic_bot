@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::time::Duration;
 
 use lazy_static::lazy_static;
@@ -103,6 +104,120 @@ fn unescape_comment(s: String) -> String {
         }
     }
     s.into_owned()
+}
+
+#[derive(Debug)]
+enum EntityRange {
+    Text {
+        range: Range<usize>,
+    },
+    Img {
+        range: Range<usize>,
+        url: Range<usize>,
+    },
+    Mention {
+        range: Range<usize>,
+        name: Range<usize>,
+    },
+    Br {
+        range: Range<usize>,
+    },
+}
+impl EntityRange {
+    fn range(&self) -> Range<usize> {
+        use EntityRange::*;
+        match self {
+            Text { range } | Img { range, .. } | Mention { range, .. } | Br { range } => {
+                range.clone()
+            }
+        }
+    }
+    fn to_text_entity<'a>(&'a self, s: &'a str) -> Option<TextEntity<'a>> {
+        use EntityRange::*;
+        match self {
+            Text { range, .. } => s.get(range.clone()).map(TextEntity::Text),
+            Img { url, .. } => s.get(url.clone()).map(TextEntity::Img),
+            Mention { name, .. } => s.get(name.clone()).map(TextEntity::Mention),
+            Br { range } => s.get(range.clone()).map(|_| TextEntity::Br),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RichText {
+    s: String,
+    entities: Vec<EntityRange>,
+}
+impl RichText {
+    pub fn entities<'a>(&'a self) -> impl Iterator<Item = TextEntity<'a>> {
+        self.entities
+            .iter()
+            .map(|range| range.to_text_entity(&self.s).expect(""))
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum TextEntity<'a> {
+    Text(&'a str),
+    Img(&'a str),
+    Mention(&'a str),
+    Br,
+}
+
+fn parse_comment(s: String) -> RichText {
+    lazy_static! {
+        static ref RULES: [(Regex, fn(m: regex::Captures) -> EntityRange); 3] = [
+            (
+                Regex::new(r#"<img src="(?P<img>[^"]+)" />"#).unwrap(),
+                |c| -> EntityRange {
+                    EntityRange::Img {
+                        range: c.get(0).unwrap().range(),
+                        url: c.name("img").expect("missing 'img' in regex").range(),
+                    }
+                }
+            ),
+            (Regex::new(r#"<a[^>]*>(?P<at>[^<]*)</a>"#).unwrap(), |c| {
+                EntityRange::Mention {
+                    range: c.get(0).unwrap().range(),
+                    name: c.name("at").expect("missing 'at' in regex").range(),
+                }
+            }),
+            (Regex::new("<br>").unwrap(), |c| {
+                EntityRange::Br {
+                    range: c.get(0).unwrap().range(),
+                }
+            })
+        ];
+    }
+
+    let mut entities: Vec<EntityRange> = RULES
+        .iter()
+        .map(|(reg, f)| reg.captures_iter(&s).map(f))
+        .flatten()
+        .collect();
+    entities.sort_by_key(|e| e.range().start);
+    let len_freezed: i128 = entities.len().try_into().expect("overflow");
+    for i in -1..len_freezed {
+        let start = if i == -1 {
+            0 // start of the string
+        } else {
+            entities[i as usize].range().end
+        };
+        let end = if i + 1 < len_freezed {
+            entities[(i + 1) as usize].range().start
+        } else {
+            s.len() // end of the string
+        };
+        assert!(start <= end, "overlap");
+        if start == end {
+            continue;
+        }
+        entities.push(EntityRange::Text {
+            range: Range { start, end },
+        })
+    }
+    entities.sort_by_key(|e| e.range().start);
+    RichText { s, entities }
 }
 
 fn fix_scheme(s: &str) -> Cow<str> {
@@ -292,5 +407,17 @@ mod test {
         let s = r##"<a href=\"#tucao-6023158\" data-id=\"6023158\" class=\"tucao-link\">@name</a> COMMENT"##;
         let r = unescape_comment(s.to_string());
         assert_eq!(&*r, "@name COMMENT")
+    }
+
+    #[test]
+    fn rich_text() {
+        let s = r##"<a href="#tucao-123" data-id="123" class="tucao-link">@name</a> COMMENT <img src="link" /><br>"##;
+        let r = parse_comment(s.to_string());
+        let r = r.entities().collect::<Vec<_>>();
+        use TextEntity::*;
+        assert_eq!(
+            r,
+            vec![Mention("@name",), Text(" COMMENT ",), Img("link",), Br]
+        )
     }
 }
