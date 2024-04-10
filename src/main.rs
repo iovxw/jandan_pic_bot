@@ -24,6 +24,7 @@ const HISTORY_SIZE: usize = 100;
 const HISTORY_FILE: &str = "history.text";
 const TG_IMAGE_DIMENSION_LIMIT: u32 = 1280;
 const LOW_QUALITY_IMG_SIZE: usize = 200 * 1024;
+const TG_CAPTION_LIMIT: usize = 1024;
 
 struct Image {
     format: image::ImageFormat,
@@ -139,8 +140,12 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
         .collect()
         .await;
 
-    let caption = format_caption(pic);
-    let caption = Text::with_markdown(&caption);
+    let captions = format_caption(pic);
+    let mut captions = captions
+        .iter()
+        .map(String::as_str)
+        .map(Text::with_markdown)
+        .collect();
     let contains_error = images.iter().any(|r| r.is_err());
     let contains_large_image = images
         .iter()
@@ -151,23 +156,32 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
         .filter_map(|r| r.as_ref().ok())
         .any(|img| img.is_gif());
     if images.is_empty() || contains_error || contains_large_image && contains_gif {
-        send_the_old_way(bot, target, images, caption).await?;
+        send_the_old_way(bot, target, images, captions).await?;
         return Ok(());
     }
     assert!(!images.is_empty());
     if contains_large_image {
         assert!(!contains_gif);
         // TODO: replace with:
-        // send_as_document_group(bot, target, images, caption).await?;
+        // send_as_document_group(bot, target, images, captions).await?;
         if images.len() == 1 {
             let img: Image = images.into_iter().find_map(|x| x.ok()).unwrap();
+            let caption = captions.remove(0);
             let doc = Document::with_bytes(&img.name, &img.data).caption(caption);
-            bot.send_document(target, doc)
+            let first_msg = bot
+                .send_document(target, doc)
                 .is_notification_disabled(true)
                 .call()
                 .await?;
+            for caption in captions {
+                bot.send_message(target, caption)
+                    .is_web_page_preview_disabled(true)
+                    .in_reply_to(first_msg.id)
+                    .call()
+                    .await?;
+            }
         } else {
-            send_the_old_way(bot, target, images, caption).await?;
+            send_the_old_way(bot, target, images, captions).await?;
         }
     } else {
         let images: Vec<Image> = images
@@ -175,7 +189,7 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
             .map(|r| r.expect("error not filtered out, check the logic"))
             .collect();
 
-        send_as_photo_group(bot, target, images, caption).await?;
+        send_as_photo_group(bot, target, images, captions).await?;
     }
     Ok(())
 }
@@ -213,7 +227,7 @@ async fn send_as_photo_group(
     bot: &tbot::Bot,
     target: ChatId<'_>,
     images: Vec<Image>,
-    caption: Text<'_>,
+    mut captions: Vec<Text<'_>>,
 ) -> anyhow::Result<()> {
     assert!(!images.is_empty());
     enum Or {
@@ -230,6 +244,7 @@ async fn send_as_photo_group(
             }
         })
         .collect::<Result<_, _>>()?;
+    let caption = captions.remove(0);
     let mut first = true;
     let group: Vec<GroupMedia> = data
         .iter()
@@ -246,10 +261,20 @@ async fn send_as_photo_group(
             (Or::Photo(p), false) => Photo::with_bytes(p).into(),
         })
         .collect();
-    bot.send_media_group(target, &group)
+    let first_msg = bot
+        .send_media_group(target, &group)
         .is_notification_disabled(true)
         .call()
         .await?;
+    let first_msg_id = first_msg.get(0).expect("tg return 0 msg").id;
+    for caption in captions {
+        bot.send_message(target, caption)
+            .is_web_page_preview_disabled(true)
+            .in_reply_to(first_msg_id)
+            .call()
+            .await?;
+    }
+
     Ok(())
 }
 
@@ -257,7 +282,7 @@ async fn send_the_old_way(
     bot: &tbot::Bot,
     target: ChatId<'_>,
     images: Vec<Result<Image, (anyhow::Error, &'_ str)>>,
-    caption: Text<'_>,
+    mut captions: Vec<Text<'_>>,
 ) -> anyhow::Result<()> {
     for img_result in images {
         match img_result {
@@ -295,10 +320,19 @@ async fn send_the_old_way(
 
         tokio::time::delay_for(Duration::from_secs(3)).await;
     }
-    bot.send_message(target, caption)
+    let caption = captions.remove(0);
+    let first_msg = bot
+        .send_message(target, caption)
         .is_web_page_preview_disabled(true)
         .call()
         .await?;
+    for caption in captions {
+        bot.send_message(target, caption)
+            .is_web_page_preview_disabled(true)
+            .in_reply_to(first_msg.id)
+            .call()
+            .await?;
+    }
     Ok(())
 }
 
@@ -307,7 +341,7 @@ fn image_too_large(img: &Image) -> bool {
         && img.data.len() > LOW_QUALITY_IMG_SIZE
 }
 
-fn format_caption(pic: &spider::Pic) -> String {
+fn format_caption(pic: &spider::Pic) -> Vec<String> {
     let mut msg = format!(
         "*{}*: https://jandan.net/t/{}\n",
         pic.author.replace("*", ""),
@@ -318,16 +352,21 @@ fn format_caption(pic: &spider::Pic) -> String {
         msg.push('\n');
     }
     write!(msg, "*OO*: {} *XX*: {}", pic.oo, pic.xx).unwrap();
+    let mut msgs = vec![msg];
     for comment in &pic.comments.hot {
-        write!(
-            msg,
+        let msg = msgs.last_mut().expect("never");
+        let formatted = format!(
             "\n*{}*: {}\n*OO*: {}, *XX*: {}",
             &comment.author.replace("*", ""),
             telegram_md_escape(&comment.content),
             comment.oo,
             comment.xx
-        )
-        .unwrap();
+        );
+        if msg.len() + formatted.len() > TG_CAPTION_LIMIT {
+            msgs.push(formatted);
+        } else {
+            msg.push_str(&formatted);
+        }
     }
-    msg
+    msgs
 }
