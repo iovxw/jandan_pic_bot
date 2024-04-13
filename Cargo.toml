@@ -18,6 +18,7 @@ marksman_escape= "0.1"
 serde = { version = "1.0", features = ["derive"] }
 image = "0.23.14"
 rsmpeg = { version = "0.14.2", features = ["link_system_ffmpeg"] }
+serde_json = "1"
 
 [dependencies.tbot]
 version = "0.6"

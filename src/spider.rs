@@ -37,7 +37,7 @@ pub struct Comment {
     pub author: String,
     pub oo: u32,
     pub xx: u32,
-    pub content: String,
+    pub content: RichText,
     pub mentions: Vec<u64>,
 }
 
@@ -86,30 +86,7 @@ where
         .map_err(|e| serde::de::Error::custom(e))
 }
 
-fn unescape_comment(s: String) -> String {
-    lazy_static! {
-        static ref RULES: [(Regex, &'static str); 3] = [
-            (
-                Regex::new(r#"<img src="(?P<img>[^"]+)" />"#).unwrap(),
-                "$img"
-            ),
-            (Regex::new(r#"<a[^>]*>(?P<at>[^<]*)</a>"#).unwrap(), "$at"),
-            (Regex::new("<br>").unwrap(), "\n")
-        ];
-    }
-
-    let mut s = Cow::Owned(s);
-    for (r, rep) in RULES.iter() {
-        // When a Cow::Borrowed is returned, the value returned is guaranteed
-        // to be equivalent to the haystack given.
-        if let Cow::Owned(ss) = r.replace_all(&s, *rep) {
-            s = Cow::Owned(ss)
-        }
-    }
-    s.into_owned()
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 enum EntityRange {
     Text {
         range: Range<usize>,
@@ -121,6 +98,7 @@ enum EntityRange {
     Mention {
         range: Range<usize>,
         name: Range<usize>,
+        id: u64,
     },
     Br {
         range: Range<usize>,
@@ -140,13 +118,15 @@ impl EntityRange {
         match self {
             Text { range, .. } => s.get(range.clone()).map(TextEntity::Text),
             Img { url, .. } => s.get(url.clone()).map(TextEntity::Img),
-            Mention { name, .. } => s.get(name.clone()).map(TextEntity::Mention),
+            Mention { name, id, .. } => s
+                .get(name.clone())
+                .map(|name| TextEntity::Mention { name, id: *id }),
             Br { range } => s.get(range.clone()).map(|_| TextEntity::Br),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RichText {
     s: String,
     entities: Vec<EntityRange>,
@@ -163,7 +143,7 @@ impl RichText {
 pub enum TextEntity<'a> {
     Text(&'a str),
     Img(&'a str),
-    Mention(&'a str),
+    Mention { name: &'a str, id: u64 },
     Br,
 }
 
@@ -179,12 +159,21 @@ fn parse_comment(s: String) -> RichText {
                     }
                 }
             ),
-            (Regex::new(r#"<a[^>]*>(?P<at>[^<]*)</a>"#).unwrap(), |c| {
-                EntityRange::Mention {
-                    range: c.get(0).unwrap().range(),
-                    name: c.name("at").expect("missing 'at' in regex").range(),
+            (
+                Regex::new(r#"<a .*data-id="(?P<id>\d+)".*>(?P<at>[^<]*)</a>"#).unwrap(),
+                |c| {
+                    EntityRange::Mention {
+                        range: c.get(0).unwrap().range(),
+                        name: c.name("at").expect("missing 'at' in regex").range(),
+                        id: c
+                            .name("id")
+                            .expect("missing 'id' in regex")
+                            .as_str()
+                            .parse()
+                            .expect("data-id format changed"),
+                    }
                 }
-            }),
+            ),
             (Regex::new("<br>").unwrap(), |c| {
                 EntityRange::Br {
                     range: c.get(0).unwrap().range(),
@@ -249,7 +238,16 @@ fn extract_mentions(comment: &str) -> Vec<u64> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comments {
     pub hot: Vec<Comment>,
-    pub extra: Vec<Comment>,
+    pub mentioned: Vec<Comment>,
+}
+
+impl Comments {
+    pub fn get(&self, id: u64) -> Option<&Comment> {
+        self.hot
+            .iter()
+            .chain(self.mentioned.iter())
+            .find(|c| c.id == id)
+    }
 }
 
 impl From<Tucao> for Comment {
@@ -260,7 +258,7 @@ impl From<Tucao> for Comment {
             author: tucao.comment_author,
             oo: tucao.vote_positive,
             xx: tucao.vote_negative,
-            content: unescape_comment(tucao.comment_content),
+            content: parse_comment(tucao.comment_content),
             mentions,
         }
     }
@@ -282,16 +280,21 @@ async fn get_comments(id: &str) -> anyhow::Result<Comments> {
         HashMap::from_iter(resp.tucao.into_iter().map(|c| (c.comment_id, c)));
 
     let hot: Vec<Comment> = resp.hot_tucao.into_iter().map(|c| c.into()).collect();
-    let extra = hot
+    let mut mentioned = Vec::new();
+    let mut mentioned_id_stack: Vec<_> = hot
         .iter()
-        .map(|comment| &comment.mentions)
+        .map(|c| c.mentions.iter().cloned())
         .flatten()
-        .filter(|&&mention_id| !hot.iter().any(|comment| comment.id == mention_id))
-        .map(|mention_id| tucao.remove(&mention_id))
-        .filter_map(|c| c)
-        .map(|c| c.into())
         .collect();
-    Ok(Comments { hot, extra })
+    while let Some(id) = mentioned_id_stack.pop() {
+        if let Some(t) = tucao.remove(&id) {
+            let c: Comment = t.into();
+            mentioned_id_stack.extend_from_slice(&c.mentions);
+            mentioned.push(c);
+        }
+    }
+    mentioned.reverse(); // fix upload order
+    Ok(Comments { hot, mentioned })
 }
 
 macro_rules! pos {
@@ -406,13 +409,6 @@ mod test {
     }
 
     #[test]
-    fn unescape() {
-        let s = r##"<a href=\"#tucao-6023158\" data-id=\"6023158\" class=\"tucao-link\">@name</a> COMMENT"##;
-        let r = unescape_comment(s.to_string());
-        assert_eq!(&*r, "@name COMMENT")
-    }
-
-    #[test]
     fn rich_text() {
         let s = r##"<a href="#tucao-123" data-id="123" class="tucao-link">@name</a> COMMENT <img src="link" /><br>"##;
         let r = parse_comment(s.to_string());
@@ -420,7 +416,15 @@ mod test {
         use TextEntity::*;
         assert_eq!(
             r,
-            vec![Mention("@name",), Text(" COMMENT ",), Img("link",), Br]
+            vec![
+                Mention {
+                    name: "@name",
+                    id: 123
+                },
+                Text(" COMMENT ",),
+                Img("link",),
+                Br
+            ]
         )
     }
 }

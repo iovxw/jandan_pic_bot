@@ -10,13 +10,14 @@ use anyhow::anyhow;
 use backon::{ConstantBuilder, Retryable};
 use convert::video_to_mp4;
 use futures::prelude::*;
-use log::error;
+use log::{error, warn};
 use tbot::types::{
     input_file::{Document, GroupMedia, Photo, Video},
     parameters::{ChatId, Text},
 };
 
 mod convert;
+mod database;
 mod spider;
 mod wayback_machine;
 
@@ -83,23 +84,19 @@ fn telegram_md_escape(s: &str) -> String {
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let token = std::env::args()
-        .nth(1)
-        .ok_or(anyhow!("Need a Telegram bot token as argument"))?;
-    let channel_id = std::env::args()
-        .nth(2)
-        .ok_or(anyhow!("Please specify a Telegram Channel"))?;
-    let wayback_machine_token = std::env::args().nth(3);
+    let wayback_machine_token = std::env::args().nth(1);
 
-    let bot = tbot::Bot::new(token);
-    let channel: ChatId = channel_id.as_str().into();
+    let mut db = database::Database::open("db.json").await?;
+    let bot = tbot::Bot::new(db.token.clone());
     let history = fs::read_to_string(HISTORY_FILE)?;
     let history: Vec<&str> = history.lines().collect();
     let pics = spider::do_the_evil().await?;
     let mut fresh_imgs: Vec<Cow<str>> = Vec::with_capacity(HISTORY_SIZE);
 
     for pic in pics.into_iter().filter(|pic| !history.contains(&&*pic.id)) {
-        send_pic(&bot, channel, &pic).await?;
+        upload_comment_images(&bot, &mut db, &pic.comments).await?;
+        upload_comment_mentions(&bot, &mut db, &pic.comments).await?;
+        send_pic(&bot, &db, &pic).await?;
 
         fresh_imgs.push(pic.id.into());
     }
@@ -121,7 +118,11 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> anyhow::Result<()> {
+async fn send_pic(
+    bot: &tbot::Bot,
+    db: &database::Database,
+    pic: &spider::Pic,
+) -> anyhow::Result<()> {
     let images: Vec<Result<Image, (_, &str)>> = futures::stream::iter(&pic.images)
         .then(|url| async move {
             match (|| async { download_image(url).await })
@@ -130,7 +131,7 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
                         .with_delay(Duration::from_secs(1))
                         .with_max_times(3),
                 )
-                .when(|e| true) // TODO: only when timeout
+                .when(|_e| true) // TODO: only when timeout
                 .await
             {
                 Ok(r) => Ok(r),
@@ -140,7 +141,7 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
         .collect()
         .await;
 
-    let captions = format_caption(pic);
+    let captions = format_caption(db, pic);
     let mut captions = captions
         .iter()
         .map(String::as_str)
@@ -156,7 +157,7 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
         .filter_map(|r| r.as_ref().ok())
         .any(|img| img.is_gif());
     if images.is_empty() || contains_error || contains_large_image && contains_gif {
-        send_the_old_way(bot, target, images, captions).await?;
+        send_the_old_way(bot, db.channel(), images, captions).await?;
         return Ok(());
     }
     assert!(!images.is_empty());
@@ -169,19 +170,19 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
             let caption = captions.remove(0);
             let doc = Document::with_bytes(&img.name, &img.data).caption(caption);
             let first_msg = bot
-                .send_document(target, doc)
+                .send_document(db.channel(), doc)
                 .is_notification_disabled(true)
                 .call()
                 .await?;
             for caption in captions {
-                bot.send_message(target, caption)
+                bot.send_message(db.channel(), caption)
                     .is_web_page_preview_disabled(true)
                     .in_reply_to(first_msg.id)
                     .call()
                     .await?;
             }
         } else {
-            send_the_old_way(bot, target, images, captions).await?;
+            send_the_old_way(bot, db.channel(), images, captions).await?;
         }
     } else {
         let images: Vec<Image> = images
@@ -189,11 +190,12 @@ async fn send_pic(bot: &tbot::Bot, target: ChatId<'_>, pic: &spider::Pic) -> any
             .map(|r| r.expect("error not filtered out, check the logic"))
             .collect();
 
-        send_as_photo_group(bot, target, images, captions).await?;
+        send_as_photo_group(bot, db.channel(), images, captions).await?;
     }
     Ok(())
 }
 
+#[allow(unused)]
 async fn send_as_document_group(
     bot: &tbot::Bot,
     target: ChatId<'_>,
@@ -341,7 +343,7 @@ fn image_too_large(img: &Image) -> bool {
         && img.data.len() > LOW_QUALITY_IMG_SIZE
 }
 
-fn format_caption(pic: &spider::Pic) -> Vec<String> {
+fn format_caption(db: &database::Database, pic: &spider::Pic) -> Vec<String> {
     let mut msg = format!(
         "*{}*: https://jandan.net/t/{}\n",
         pic.author.replace("*", ""),
@@ -358,7 +360,7 @@ fn format_caption(pic: &spider::Pic) -> Vec<String> {
         let formatted = format!(
             "\n*{}*: {}\n*OO*: {}, *XX*: {}",
             &comment.author.replace("*", ""),
-            telegram_md_escape(&comment.content),
+            comment_to_tg_md(db, &comment.content),
             comment.oo,
             comment.xx
         );
@@ -369,4 +371,83 @@ fn format_caption(pic: &spider::Pic) -> Vec<String> {
         }
     }
     msgs
+}
+
+fn comment_to_tg_md(db: &database::Database, comment: &spider::RichText) -> String {
+    let mut r = String::new();
+    for e in comment.entities() {
+        use spider::TextEntity::*;
+        match e {
+            Text(s) => r.push_str(&telegram_md_escape(s)),
+            Br => r.push('\n'),
+            Img(url) => {
+                if let Some(tg_link) = db.get_img(url) {
+                    write!(r, "[［图片］]({})", tg_link).expect("never fail");
+                } else {
+                    r.push_str(url)
+                }
+            }
+            Mention { name, id } => {
+                if let Some(msg_link) = db.get_comment(id) {
+                    write!(r, "[{}]({})", name, msg_link).expect("never fail");
+                } else {
+                    r.push_str(name)
+                }
+            }
+        }
+    }
+    r.trim().to_string() // TODO: zero alloc?
+}
+
+async fn upload_comment_images(
+    bot: &tbot::Bot,
+    db: &mut database::Database,
+    c: &spider::Comments,
+) -> Result<(), anyhow::Error> {
+    for comment in c.hot.iter().chain(c.mentioned.iter()) {
+        for entry in comment.content.entities() {
+            if let spider::TextEntity::Img(url) = entry {
+                if db.get_img(url).is_some() {
+                    continue;
+                }
+                let img = download_image(url).await?;
+                let photo = Photo::with_bytes(&img.data);
+                let msg = bot
+                    .send_photo(db.assets_channel(), photo)
+                    .is_notification_disabled(true)
+                    .call()
+                    .await?;
+                db.put_img(url.to_string(), msg.id.0.into()).await;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn upload_comment_mentions(
+    bot: &tbot::Bot,
+    db: &mut database::Database,
+    c: &spider::Comments,
+) -> Result<(), anyhow::Error> {
+    for comment in &c.mentioned {
+        if db.get_comment(comment.id).is_some() {
+            continue;
+        }
+        let text = format!(
+            "*{}*: {}\n*OO*: {}, *XX*: {}",
+            &comment.author.replace("*", ""),
+            comment_to_tg_md(db, &comment.content),
+            comment.oo,
+            comment.xx
+        );
+        let text = Text::with_markdown(&text);
+
+        let msg = bot
+            .send_message(db.assets_channel(), text)
+            .is_notification_disabled(true)
+            .call()
+            .await?;
+        db.put_comment(comment.id, msg.id.0.into()).await;
+    }
+    Ok(())
 }
