@@ -7,7 +7,6 @@ use std::io::Cursor;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use backon::{ConstantBuilder, Retryable};
 use convert::video_to_mp4;
 use futures::prelude::*;
 use log::{error, warn};
@@ -125,18 +124,18 @@ async fn send_pic(
 ) -> anyhow::Result<()> {
     let images: Vec<Result<Image, (_, &str)>> = futures::stream::iter(&pic.images)
         .then(|url| async move {
-            match (|| async { download_image(url).await })
-                .retry(
-                    &ConstantBuilder::default()
-                        .with_delay(Duration::from_secs(1))
-                        .with_max_times(3),
-                )
-                .when(|_e| true) // TODO: only when timeout
-                .await
-            {
-                Ok(r) => Ok(r),
-                Err(e) => Err((e, url.as_str())),
+            for n in 3..=0 {
+                match download_image(url).await {
+                    Ok(r) => return Ok(r),
+                    Err(e) if n == 0 => {
+                        return Err((e, url.as_str()));
+                    }
+                    Err(_e) => {
+                        tokio::time::delay_for(Duration::from_secs(1)).await;
+                    }
+                }
             }
+            unreachable!()
         })
         .collect()
         .await;
@@ -339,6 +338,7 @@ async fn send_the_old_way(
 }
 
 fn image_too_large(img: &Image) -> bool {
+    dbg!(img.width, img.height, img.data.len(),LOW_QUALITY_IMG_SIZE);
     std::cmp::max(img.width, img.height) > TG_IMAGE_DIMENSION_LIMIT
         && img.data.len() > LOW_QUALITY_IMG_SIZE
 }
