@@ -23,6 +23,7 @@ mod wayback_machine;
 const HISTORY_SIZE: usize = 100;
 const HISTORY_FILE: &str = "history.text";
 const TG_IMAGE_DIMENSION_LIMIT: u32 = 1280;
+const TG_IMAGE_SIZE_LIMIT: usize = 10 * 1000 * 1000;
 const LOW_QUALITY_IMG_SIZE: usize = 200 * 1024;
 const TG_CAPTION_LIMIT: usize = 1024;
 
@@ -338,9 +339,9 @@ async fn send_the_old_way(
 }
 
 fn image_too_large(img: &Image) -> bool {
-    dbg!(img.width, img.height, img.data.len(),LOW_QUALITY_IMG_SIZE);
     std::cmp::max(img.width, img.height) > TG_IMAGE_DIMENSION_LIMIT
         && img.data.len() > LOW_QUALITY_IMG_SIZE
+        || img.data.len() > TG_IMAGE_SIZE_LIMIT
 }
 
 fn format_caption(db: &database::Database, pic: &spider::Pic) -> Vec<String> {
