@@ -125,7 +125,7 @@ async fn send_pic(
 ) -> anyhow::Result<()> {
     let images: Vec<Result<Image, (_, &str)>> = futures::stream::iter(&pic.images)
         .then(|url| async move {
-            for n in 3..=0 {
+            for n in (0..3).rev() {
                 match download_image(url).await {
                     Ok(r) => return Ok(r),
                     Err(e) if n == 0 => {
