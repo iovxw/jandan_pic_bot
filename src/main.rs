@@ -385,14 +385,14 @@ fn comment_to_tg_md(db: &database::Database, comment: &spider::RichText) -> Stri
                 if let Some(tg_link) = db.get_img(url) {
                     write!(r, "[［图片］]({})", tg_link).expect("never fail");
                 } else {
-                    r.push_str(url)
+                    r.push_str(&telegram_md_escape(url))
                 }
             }
             Mention { name, id } => {
                 if let Some(msg_link) = db.get_comment(id) {
                     write!(r, "[{}]({})", name, msg_link).expect("never fail");
                 } else {
-                    r.push_str(name)
+                    r.push_str(&telegram_md_escape(name))
                 }
             }
         }
