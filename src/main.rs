@@ -280,6 +280,30 @@ async fn send_as_photo_group(
     Ok(())
 }
 
+async fn upload_single_image(
+    bot: &tbot::Bot,
+    target: ChatId<'_>,
+    img: Image
+) -> anyhow::Result<tbot::types::Message> {
+    if img.is_gif() {
+        let mp4 = video_to_mp4(img.data)?;
+        bot.send_video(target, Video::with_bytes(&mp4))
+            .is_notification_disabled(true)
+            .call()
+            .await
+    } else if image_too_large(&img) {
+        bot.send_document(target, Document::with_bytes(&img.name, &img.data))
+            .is_notification_disabled(true)
+            .call()
+            .await
+    } else {
+        bot.send_photo(target, Photo::with_bytes(&img.data))
+            .is_notification_disabled(true)
+            .call()
+            .await
+    }
+}
+
 async fn send_the_old_way(
     bot: &tbot::Bot,
     target: ChatId<'_>,
@@ -289,27 +313,7 @@ async fn send_the_old_way(
     for img_result in images {
         match img_result {
             Ok(img) => {
-                if img.is_gif() {
-                    let mp4 = video_to_mp4(img.data)?;
-                    bot.send_video(target, Video::with_bytes(&mp4))
-                        .is_notification_disabled(true)
-                        .call()
-                        .await?;
-                } else {
-                    if image_too_large(&img) {
-                        bot.send_document(target, Document::with_bytes(&img.name, &img.data))
-                            .is_notification_disabled(true)
-                            .call()
-                            .await?;
-                    } else {
-                        let p = Photo::with_bytes(&img.data);
-
-                        bot.send_photo(target, p)
-                            .is_notification_disabled(true)
-                            .call()
-                            .await?;
-                    };
-                }
+                upload_single_image(bot, target, img).await?;
             }
             Err((e, img_url)) => {
                 error!("{}: {}", img_url, e);
@@ -411,14 +415,19 @@ async fn upload_comment_images(
                 if db.get_img(url).is_some() {
                     continue;
                 }
-                let img = download_image(url).await?;
-                let photo = Photo::with_bytes(&img.data);
-                let msg = bot
-                    .send_photo(db.assets_channel(), photo)
-                    .is_notification_disabled(true)
-                    .call()
-                    .await?;
-                db.put_img(url.to_string(), msg.id.0.into()).await;
+                match download_image(url).await {
+                    Ok(img) => {
+                        let msg = upload_single_image(bot, db.assets_channel(), img).await?;
+                        db.put_img(url.to_string(), msg.id.0.into()).await;
+                    }
+                    Err(e) => {
+                        error!("{}: {}", url, e);
+                        bot.send_message(db.assets_channel(), url)
+                            .is_notification_disabled(true)
+                            .call()
+                            .await?;
+                    }
+                }
             }
         }
     }
