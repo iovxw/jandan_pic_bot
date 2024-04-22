@@ -6,10 +6,9 @@ use std::fs;
 use std::io::Cursor;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use convert::video_to_mp4;
 use futures::prelude::*;
-use log::{error, warn};
+use log::error;
 use tbot::types::{
     input_file::{Document, GroupMedia, Photo, Video},
     parameters::{ChatId, Text},
@@ -285,23 +284,24 @@ async fn upload_single_image(
     target: ChatId<'_>,
     img: Image
 ) -> anyhow::Result<tbot::types::Message> {
-    if img.is_gif() {
+    let msg = if img.is_gif() {
         let mp4 = video_to_mp4(img.data)?;
         bot.send_video(target, Video::with_bytes(&mp4))
             .is_notification_disabled(true)
             .call()
-            .await
+            .await?
     } else if image_too_large(&img) {
         bot.send_document(target, Document::with_bytes(&img.name, &img.data))
             .is_notification_disabled(true)
             .call()
-            .await
+            .await?
     } else {
         bot.send_photo(target, Photo::with_bytes(&img.data))
             .is_notification_disabled(true)
             .call()
-            .await
-    }
+            .await?
+    };
+    Ok(msg)
 }
 
 async fn send_the_old_way(
