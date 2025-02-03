@@ -282,7 +282,7 @@ async fn send_as_photo_group(
 async fn upload_single_image(
     bot: &tbot::Bot,
     target: ChatId<'_>,
-    img: Image
+    img: Image,
 ) -> anyhow::Result<tbot::types::Message> {
     let msg = if img.is_gif() {
         let mp4 = video_to_mp4(img.data)?;

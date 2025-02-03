@@ -7,10 +7,11 @@ use lazy_static::lazy_static;
 use marksman_escape::Unescape;
 use regex::Regex;
 use reqwest::header;
-use scraper::Html;
+use scraper::{Html, Selector};
 use serde::Deserialize;
 
-const JANDAN_HOME: &str = "http://jandan.net/";
+const JANDAN_HOME: &str = "http://jandan.net";
+const JANDAN_THREAD: &str = "http://jandan.net/t/";
 const TUCAO_API: &str = "http://jandan.net/tucao/";
 
 thread_local! {
@@ -51,6 +52,16 @@ pub struct Pic {
     pub text: String,
     pub images: Vec<String>,
     pub comments: Comments,
+}
+
+#[derive(Deserialize)]
+struct RawPic<'a> {
+    id: u64,
+    author: String,
+    #[serde(borrow)]
+    content: Cow<'a, str>,
+    vote_positive: u32,
+    vote_negative: u32,
 }
 
 #[derive(Deserialize, Debug)]
@@ -264,7 +275,7 @@ impl From<Tucao> for Comment {
     }
 }
 
-async fn get_comments(id: &str) -> anyhow::Result<Comments> {
+async fn get_comments(id: u64) -> anyhow::Result<Comments> {
     let url = format!("{}{}", TUCAO_API, id);
 
     let resp = CLIENT
@@ -303,19 +314,12 @@ macro_rules! pos {
     };
 }
 
-mod selector {
-    use lazy_static::lazy_static;
-    use scraper::Selector;
-    lazy_static! {
-        pub static ref AUTHOR: Selector = Selector::parse("#list-pic .acv_author").unwrap();
-        pub static ref COMMENT: Selector = Selector::parse("#list-pic .acv_comment").unwrap();
-        pub static ref COMMENT_IMG: Selector = Selector::parse(".view_img_link").unwrap();
-        pub static ref VOTE: Selector = Selector::parse("#list-pic .jandan-vote").unwrap();
-        pub static ref ID: Selector = Selector::parse("a[data-id]").unwrap();
-        pub static ref HREF: Selector = Selector::parse("*[href]").unwrap();
-        pub static ref P: Selector = Selector::parse("p").unwrap();
-        pub static ref SPAN: Selector = Selector::parse("span").unwrap();
-    }
+macro_rules! regex {
+    ($rule:literal) => {{
+        use std::sync::LazyLock;
+        static R: LazyLock<Regex> = LazyLock::new(|| Regex::new($rule).unwrap());
+        &*R
+    }};
 }
 
 pub async fn do_the_evil() -> anyhow::Result<Vec<Pic>> {
@@ -327,73 +331,48 @@ pub async fn do_the_evil() -> anyhow::Result<Vec<Pic>> {
         .text()
         .await?;
 
-    let document = Html::parse_document(&html);
+    let url = &regex!(r#"load_sidebar_list\('([^']+)"#)
+        .captures(&html)
+        .expect("load_sidebar_list not found")[1];
+
+    let resp = CLIENT
+        .with(|client| client.get(&format!("{}{}", JANDAN_HOME, url)))
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+
+    #[derive(Deserialize)]
+    struct Resp<'a> {
+        #[serde(borrow)]
+        data: Vec<RawPic<'a>>,
+    }
+
+    let resp: Resp = serde_json::from_slice(&resp)?;
 
     let mut pics = Vec::new();
 
-    for ((author_div, comment_div), vote_div) in document
-        .select(&selector::AUTHOR)
-        .zip(document.select(&selector::COMMENT))
-        .zip(document.select(&selector::VOTE))
-    {
-        let author = author_div
-            .text()
-            .next()
-            .expect(pos!())
-            .split('@')
-            .next()
-            .expect(pos!())
-            .trim()
-            .to_owned();
-        let link = author_div
-            .select(&selector::HREF)
-            .next()
-            .expect(pos!())
-            .value()
-            .attr("href")
-            .expect(pos!())
-            .to_owned();
-        let text_buf = comment_div
-            .select(&selector::P)
-            .flat_map(|p| p.children())
-            .filter_map(|child| child.value().as_text())
-            .map(|text| text.text.trim_matches('\n'))
-            .filter(|line| !line.is_empty())
-            .intersperse("\n")
-            .map(|line| Unescape::new(line.as_bytes().iter().copied()))
-            .flatten()
-            .collect::<Vec<u8>>();
-        let text = String::from_utf8(text_buf).unwrap();
-        let images = comment_div
-            .select(&selector::COMMENT_IMG)
-            .map(|a| a.value().attr("href").expect(pos!()))
-            .map(|href| fix_scheme(href).into_owned())
-            .collect::<Vec<String>>();
-        let mut votes = vote_div
-            .select(&selector::SPAN)
-            .map(|span| span.text().next().expect(pos!()))
-            .map(|vote_str| vote_str.parse::<u32>().expect(pos!()));
-        let (oo, xx) = (votes.next().expect(pos!()), votes.next().expect(pos!()));
-        let id = vote_div
-            .select(&selector::ID)
-            .next()
-            .expect(pos!())
-            .value()
-            .attr("data-id")
-            .expect(pos!())
-            .to_string();
-        let comments = get_comments(&id).await?;
-        let pic = Pic {
-            author,
-            link,
-            id,
-            oo,
-            xx,
+    for raw_pic in resp.data {
+        let content = Html::parse_fragment(&raw_pic.content);
+        let text: String = content.root_element().text().collect();
+        let text = regex!("\n+").replace_all(&text, "\n").trim().to_owned();
+        let images = content
+            .select(&Selector::parse("img").unwrap())
+            .filter_map(|e| e.attr("src"))
+            .map(str::to_owned)
+            .collect();
+        let comments = get_comments(raw_pic.id).await?;
+        pics.push(Pic {
+            author: raw_pic.author,
+            link: format!("{}{}", JANDAN_THREAD, raw_pic.id),
+            oo: raw_pic.vote_positive,
+            xx: raw_pic.vote_negative,
+            id: raw_pic.id.to_string(),
             text,
             images,
             comments,
-        };
-        pics.push(pic);
+        });
     }
 
     Ok(pics)
