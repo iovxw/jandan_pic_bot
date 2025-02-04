@@ -223,17 +223,6 @@ fn parse_comment(s: String) -> RichText {
     RichText { s, entities }
 }
 
-fn fix_scheme(s: &str) -> Cow<str> {
-    if s.starts_with("//") {
-        let mut ns = String::with_capacity(6 + s.len());
-        ns.push_str("https:");
-        ns.push_str(&s);
-        Cow::Owned(ns)
-    } else {
-        Cow::Borrowed(s)
-    }
-}
-
 fn extract_mentions(comment: &str) -> Vec<u64> {
     lazy_static! {
         // <a href="#tucao-12116426" data-id="12116426" class="tucao-link">
@@ -304,14 +293,8 @@ async fn get_comments(id: u64) -> anyhow::Result<Comments> {
             mentioned.push(c);
         }
     }
-    mentioned.reverse(); // fix upload order
+    mentioned.sort_by_key(|c| c.mentions.len()); // fix upload order
     Ok(Comments { hot, mentioned })
-}
-
-macro_rules! pos {
-    () => {
-        concat!(file!(), ": ", line!(), ",", column!())
-    };
 }
 
 macro_rules! regex {
@@ -340,7 +323,7 @@ pub async fn do_the_evil() -> anyhow::Result<Vec<Pic>> {
         .send()
         .await?
         .error_for_status()?
-        .bytes()
+        .bytes() // .json doesn't support borrowed deserialize
         .await?;
 
     #[derive(Deserialize)]
@@ -348,7 +331,6 @@ pub async fn do_the_evil() -> anyhow::Result<Vec<Pic>> {
         #[serde(borrow)]
         data: Vec<RawPic<'a>>,
     }
-
     let resp: Resp = serde_json::from_slice(&resp)?;
 
     let mut pics = Vec::new();
