@@ -409,7 +409,11 @@ async fn upload_comment_images(
     db: &mut database::Database,
     c: &spider::Comments,
 ) -> Result<(), anyhow::Error> {
-    for comment in c.hot.iter().chain(c.mentioned.iter()) {
+    for comment in c
+        .hot
+        .iter()
+        .chain(c.mentions.values().filter_map(|c| c.as_ref()))
+    {
         for entry in comment.content.entities() {
             if let spider::TextEntity::Img(url) = entry {
                 if db.get_img(url).is_some() {
@@ -439,25 +443,28 @@ async fn upload_comment_mentions(
     db: &mut database::Database,
     c: &spider::Comments,
 ) -> Result<(), anyhow::Error> {
-    for comment in &c.mentioned {
-        if db.get_comment(comment.id).is_some() {
+    for (&id, comment) in &c.mentions {
+        if db.get_comment(id).is_some() {
             continue;
         }
-        let text = format!(
-            "*{}*: {}\n*OO*: {}, *XX*: {}",
-            &comment.author.replace("*", ""),
-            comment_to_tg_md(db, &comment.content),
-            comment.oo,
-            comment.xx
-        );
-        let text = Text::with_markdown(&text);
+        let text = if let Some(comment) = comment {
+            format!(
+                "*{}*: {}\n*OO*: {}, *XX*: {}",
+                &comment.author.replace("*", ""),
+                comment_to_tg_md(db, &comment.content),
+                comment.oo,
+                comment.xx
+            )
+        } else {
+            "这条吐槽不见了".into()
+        };
 
         let msg = bot
-            .send_message(db.assets_channel(), text)
+            .send_message(db.assets_channel(), Text::with_markdown(&text))
             .is_notification_disabled(true)
             .call()
             .await?;
-        db.put_comment(comment.id, msg.id.0.into()).await;
+        db.put_comment(id, msg.id.0.into()).await;
     }
     Ok(())
 }

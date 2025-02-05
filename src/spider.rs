@@ -1,7 +1,7 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Duration;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use lazy_static::lazy_static;
 use marksman_escape::Unescape;
@@ -238,16 +238,7 @@ fn extract_mentions(comment: &str) -> Vec<u64> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comments {
     pub hot: Vec<Comment>,
-    pub mentioned: Vec<Comment>,
-}
-
-impl Comments {
-    pub fn get(&self, id: u64) -> Option<&Comment> {
-        self.hot
-            .iter()
-            .chain(self.mentioned.iter())
-            .find(|c| c.id == id)
-    }
+    pub mentions: BTreeMap<u64, Option<Comment>>,
 }
 
 impl From<Tucao> for Comment {
@@ -276,25 +267,27 @@ async fn get_comments(id: u64) -> anyhow::Result<Comments> {
         .await?;
     assert_eq!(resp.code, 0);
 
+    let hot: Vec<Comment> = resp.hot_tucao.into_iter().map(|c| c.into()).collect();
+
     let mut tucao: HashMap<u64, Tucao> =
         HashMap::from_iter(resp.tucao.into_iter().map(|c| (c.comment_id, c)));
 
-    let hot: Vec<Comment> = resp.hot_tucao.into_iter().map(|c| c.into()).collect();
-    let mut mentioned = Vec::new();
-    let mut mentioned_id_stack: Vec<_> = hot
+    let mut mentions: BTreeMap<u64, Option<Comment>> = BTreeMap::new();
+    let mut id_stack: Vec<_> = hot
         .iter()
-        .map(|c| c.mentions.iter().cloned())
+        .map(|c| c.mentions.iter().map(|x| *x))
         .flatten()
         .collect();
-    while let Some(id) = mentioned_id_stack.pop() {
+    while let Some(id) = id_stack.pop() {
         if let Some(t) = tucao.remove(&id) {
             let c: Comment = t.into();
-            mentioned_id_stack.extend_from_slice(&c.mentions);
-            mentioned.push(c);
+            id_stack.extend_from_slice(&c.mentions);
+            mentions.insert(c.id, Some(c));
+        } else if !mentions.contains_key(&id) {
+            mentions.insert(id, None);
         }
     }
-    mentioned.sort_by_key(|c| c.mentions.len()); // fix upload order
-    Ok(Comments { hot, mentioned })
+    Ok(Comments { hot, mentions })
 }
 
 macro_rules! regex {
