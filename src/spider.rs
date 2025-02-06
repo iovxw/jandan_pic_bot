@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 const JANDAN_HOME: &str = "http://jandan.net";
 const JANDAN_THREAD: &str = "http://jandan.net/t/";
-const TUCAO_API: &str = "http://jandan.net/tucao/";
+const TUCAO_API: &str = "http://jandan.net/api/tucao/list/";
 
 thread_local! {
     pub static CLIENT: reqwest::Client = {
