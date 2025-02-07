@@ -1,9 +1,8 @@
 #![feature(iter_intersperse)]
 
-use std::borrow::Cow;
-use std::fmt::Write;
-use std::fs;
-use std::io::Cursor;
+use std::fmt::Write as _;
+use std::fs::File; // FIXME: replace after tokio 0.2 -> 1.0
+use std::io::{Cursor, Read, Write as _};
 use std::time::Duration;
 
 use convert::video_to_mp4;
@@ -19,7 +18,7 @@ mod database;
 mod spider;
 mod wayback_machine;
 
-const HISTORY_SIZE: usize = 100;
+const HISTORY_SOFT_LIMIT: usize = 100;
 const HISTORY_FILE: &str = "history.text";
 const TG_IMAGE_DIMENSION_LIMIT: u32 = 1280;
 const TG_IMAGE_SIZE_LIMIT: usize = 10 * 1000 * 1000;
@@ -83,37 +82,29 @@ fn telegram_md_escape(s: &str) -> String {
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let wayback_machine_token = std::env::args().nth(1);
-
     let mut db = database::Database::open("db.json").await?;
     let bot = tbot::Bot::new(db.token.clone());
-    let history = fs::read_to_string(HISTORY_FILE)?;
-    let history: Vec<&str> = history.lines().collect();
-    let pics = spider::do_the_evil().await?;
-    let mut fresh_imgs: Vec<Cow<str>> = Vec::with_capacity(HISTORY_SIZE);
+    let mut history_file = File::options().read(true).append(true).open(HISTORY_FILE)?;
 
+    let mut buf = String::new();
+    history_file.read_to_string(&mut buf)?;
+    let history: Vec<&str> = buf.lines().filter(|l| !l.is_empty()).collect();
+    let fresh_start = history.len().checked_sub(HISTORY_SOFT_LIMIT).unwrap_or(0);
+    let history = &history[fresh_start..];
+
+    let pics = spider::do_the_evil().await?;
     for pic in pics.into_iter().filter(|pic| !history.contains(&&*pic.id)) {
         upload_comment_images(&bot, &mut db, &pic.comments).await?;
         upload_comment_mentions(&bot, &mut db, &pic.comments).await?;
         send_pic(&bot, &db, &pic).await?;
 
-        fresh_imgs.push(pic.id.into());
+        write!(history_file, "\n{}", pic.id)?;
     }
 
-    fs::write(
-        HISTORY_FILE,
-        fresh_imgs
-            .iter()
-            .map(|s| &**s)
-            .chain(history.into_iter())
-            .take(HISTORY_SIZE)
-            .intersperse("\n".into())
-            .collect::<String>(),
-    )?;
-
-    if let Some(token) = wayback_machine_token {
-        wayback_machine::push(&token, &fresh_imgs).await?;
-    }
+    // let wayback_machine_token = std::env::args().nth(1);
+    // if let Some(token) = wayback_machine_token {
+    //     wayback_machine::push(&token, &fresh_imgs).await?;
+    // }
     Ok(())
 }
 
