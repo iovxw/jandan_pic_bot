@@ -88,9 +88,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut buf = String::new();
     history_file.read_to_string(&mut buf)?;
-    let history: Vec<&str> = buf.lines().filter(|l| !l.is_empty()).collect();
-    let fresh_start = history.len().checked_sub(HISTORY_SOFT_LIMIT).unwrap_or(0);
-    let history = &history[fresh_start..];
+    let mut history: Vec<&str> = buf.lines().filter(|l| !l.is_empty()).collect();
+    let mut new_pics = Vec::new();
 
     let pics = spider::do_the_evil().await?;
     for pic in pics.into_iter().filter(|pic| !history.contains(&&*pic.id)) {
@@ -99,7 +98,13 @@ async fn main() -> anyhow::Result<()> {
         send_pic(&bot, &db, &pic).await?;
 
         write!(history_file, "\n{}", pic.id)?;
+        new_pics.push(pic.id);
     }
+    history.extend(new_pics.iter().map(String::as_str));
+    let fresh_start = history.len().checked_sub(HISTORY_SOFT_LIMIT).unwrap_or(0);
+    // truncate history
+    // TODO: FALLOC_FL_COLLAPSE_RANGE
+    std::fs::write(HISTORY_FILE, history[fresh_start..].join("\n"))?;
 
     // let wayback_machine_token = std::env::args().nth(1);
     // if let Some(token) = wayback_machine_token {
