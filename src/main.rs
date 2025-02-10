@@ -1,5 +1,3 @@
-#![feature(iter_intersperse)]
-
 use std::fmt::Write as _;
 use std::fs::File; // FIXME: replace after tokio 0.2 -> 1.0
 use std::io::{Cursor, Read, Write as _};
@@ -16,7 +14,7 @@ use tbot::types::{
 mod convert;
 mod database;
 mod spider;
-mod wayback_machine;
+// mod wayback_machine;
 
 const HISTORY_SOFT_LIMIT: usize = 100;
 const HISTORY_FILE: &str = "history.text";
