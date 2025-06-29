@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::fs::File; // FIXME: replace after tokio 0.2 -> 1.0
 use std::io::{Cursor, Read, Write as _};
@@ -38,6 +39,42 @@ impl Image {
 }
 
 async fn download_image(url: &str) -> anyhow::Result<Image> {
+    let large = url
+        .replace("/mw600/", "/large/")
+        .replace("/orj360/", "/large/");
+    for (url, referer) in [
+        (
+            Cow::from(large.replace("img.toto.im", "tva1.sinaimg.cn")),
+            "https://weibo.com/",
+        ),
+        (Cow::from(large), "https://jandan.net/"),
+        (Cow::from(url), "https://jandan.net/"),
+    ] {
+        if let Ok(img) = download_image_with_retries_and_referer(&url, 3, referer).await {
+            return Ok(img);
+        }
+    }
+    anyhow::bail!("Failed to download image from all candidates");
+}
+
+async fn download_image_with_retries_and_referer(
+    url: &str,
+    retries: usize,
+    referer: &str,
+) -> anyhow::Result<Image> {
+    for attempt in (0..retries).rev() {
+        match download_image_with_referer(url, referer).await {
+            Ok(img) => return Ok(img),
+            Err(e) if attempt == 0 => return Err(e),
+            Err(_e) => {
+                tokio::time::delay_for(Duration::from_secs(1)).await;
+            }
+        }
+    }
+    unreachable!()
+}
+
+async fn download_image_with_referer(url: &str, referer: &str) -> anyhow::Result<Image> {
     let url = reqwest::Url::parse(url)?;
     let name = url
         .path_segments()
@@ -46,7 +83,7 @@ async fn download_image(url: &str) -> anyhow::Result<Image> {
         .unwrap_or_default()
         .into();
     let buf = spider::CLIENT
-        .with(|client| client.get(url).header("referer", "https://jandan.net/"))
+        .with(|client| client.get(url).header("referer", referer))
         .send()
         .await?
         .error_for_status()?
@@ -117,20 +154,7 @@ async fn send_pic(
     pic: &spider::Pic,
 ) -> anyhow::Result<()> {
     let images: Vec<Result<Image, (_, &str)>> = futures::stream::iter(&pic.images)
-        .then(|url| async move {
-            for n in (0..3).rev() {
-                match download_image(url).await {
-                    Ok(r) => return Ok(r),
-                    Err(e) if n == 0 => {
-                        return Err((e, url.as_str()));
-                    }
-                    Err(_e) => {
-                        tokio::time::delay_for(Duration::from_secs(1)).await;
-                    }
-                }
-            }
-            unreachable!()
-        })
+        .then(|url| download_image(url).map_err(|e| (e, url.as_str())))
         .collect()
         .await;
 
@@ -420,10 +444,11 @@ async fn upload_comment_images(
                     }
                     Err(e) => {
                         error!("{}: {}", url, e);
-                        bot.send_message(db.assets_channel(), url)
+                        let msg = bot.send_message(db.assets_channel(), url)
                             .is_notification_disabled(true)
                             .call()
                             .await?;
+                        db.put_img(url.to_string(), msg.id.0.into()).await;
                     }
                 }
             }
