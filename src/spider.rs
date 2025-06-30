@@ -1,36 +1,18 @@
 use std::collections::HashMap;
 use std::ops::Range;
-use std::time::Duration;
 use std::{borrow::Cow, collections::BTreeMap};
 
 use lazy_static::lazy_static;
 use marksman_escape::Unescape;
 use regex::Regex;
-use reqwest::header;
 use scraper::{Html, Selector};
 use serde::Deserialize;
+
+use crate::http;
 
 const JANDAN_HOME: &str = "http://jandan.net";
 const JANDAN_THREAD: &str = "http://jandan.net/t/";
 const TUCAO_API: &str = "http://jandan.net/api/tucao/list/";
-
-thread_local! {
-    pub static CLIENT: reqwest::Client = {
-        let headers = header::HeaderMap::new();
-        const USER_AGENT: &str = concat!(
-            env!("CARGO_PKG_NAME"),
-            "/",
-            env!("CARGO_PKG_VERSION"),
-            " (+https://t.me/jandan_pic)"
-        );
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .user_agent(header::HeaderValue::from_static(USER_AGENT))
-            .default_headers(headers)
-            .build()
-            .unwrap()
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
@@ -258,9 +240,7 @@ impl From<Tucao> for Comment {
 async fn get_comments(id: u64) -> anyhow::Result<Comments> {
     let url = format!("{}{}", TUCAO_API, id);
 
-    let resp = CLIENT
-        .with(|client| client.get(&url))
-        .send()
+    let resp = http::get(&url)
         .await?
         .error_for_status()?
         .json::<TucaoResp>()
@@ -299,9 +279,7 @@ macro_rules! regex {
 }
 
 pub async fn do_the_evil() -> anyhow::Result<Vec<Pic>> {
-    let html = CLIENT
-        .with(|client| client.get(JANDAN_HOME))
-        .send()
+    let html = http::get(JANDAN_HOME)
         .await?
         .error_for_status()?
         .text()
@@ -311,9 +289,7 @@ pub async fn do_the_evil() -> anyhow::Result<Vec<Pic>> {
         .captures(&html)
         .expect("load_sidebar_list not found")[1];
 
-    let resp = CLIENT
-        .with(|client| client.get(&format!("{}{}", JANDAN_HOME, url)))
-        .send()
+    let resp = http::get(&format!("{}{}", JANDAN_HOME, url))
         .await?
         .error_for_status()?
         .bytes() // .json doesn't support borrowed deserialize

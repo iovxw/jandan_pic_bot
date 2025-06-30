@@ -14,6 +14,7 @@ use tbot::types::{
 
 mod convert;
 mod database;
+mod http;
 mod spider;
 // mod wayback_machine;
 
@@ -50,41 +51,21 @@ async fn download_image(url: &str) -> anyhow::Result<Image> {
         (Cow::from(large), "https://jandan.net/"),
         (Cow::from(url), "https://jandan.net/"),
     ] {
-        if let Ok(img) = download_image_with_retries_and_referer(&url, 3, referer).await {
+        if let Ok(img) = download_image_with_referer(&url, referer).await {
             return Ok(img);
         }
     }
     anyhow::bail!("Failed to download image from all candidates");
 }
 
-async fn download_image_with_retries_and_referer(
-    url: &str,
-    retries: usize,
-    referer: &str,
-) -> anyhow::Result<Image> {
-    for attempt in (0..retries).rev() {
-        match download_image_with_referer(url, referer).await {
-            Ok(img) => return Ok(img),
-            Err(e) if attempt == 0 => return Err(e),
-            Err(_e) => {
-                tokio::time::delay_for(Duration::from_secs(1)).await;
-            }
-        }
-    }
-    unreachable!()
-}
-
 async fn download_image_with_referer(url: &str, referer: &str) -> anyhow::Result<Image> {
-    let url = reqwest::Url::parse(url)?;
-    let name = url
+    let file_name = reqwest::Url::parse(url)?
         .path_segments()
         .map(|s| s.last())
         .flatten()
         .unwrap_or_default()
         .into();
-    let buf = spider::CLIENT
-        .with(|client| client.get(url).header("referer", referer))
-        .send()
+    let buf =  http::get_with_referer(url, referer)
         .await?
         .error_for_status()?
         .bytes()
@@ -98,7 +79,7 @@ async fn download_image_with_referer(url: &str, referer: &str) -> anyhow::Result
     let dimensions = reader.into_dimensions()?;
     Ok(Image {
         format,
-        name,
+        name: file_name,
         width: dimensions.0,
         height: dimensions.1,
         data: buf.to_vec(),
