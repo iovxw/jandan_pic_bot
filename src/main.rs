@@ -48,6 +48,10 @@ async fn download_image(url: &str) -> anyhow::Result<Image> {
             Cow::from(large.replace("img.toto.im", "tva1.sinaimg.cn")),
             "https://weibo.com/",
         ),
+        (
+            Cow::from(large.replace("tva1.moyu.im", "tva1.sinaimg.cn")),
+            "https://weibo.com/",
+        ),
         (Cow::from(large), "https://jandan.net/"),
         (Cow::from(url), "https://jandan.net/"),
     ] {
