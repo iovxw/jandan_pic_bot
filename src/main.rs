@@ -69,11 +69,17 @@ async fn download_image_with_referer(url: &str, referer: &str) -> anyhow::Result
         .flatten()
         .unwrap_or_default()
         .into();
-    let buf =  http::get_with_referer(url, referer)
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+    let resp = http::get_with_referer(url, referer).await?;
+    let retrieved_filename = resp
+        .url()
+        .path_segments()
+        .expect("not cannot-be-a-base URL")
+        .last()
+        .expect("always has one path segment");
+    if retrieved_filename.starts_with("default_d_w_") {
+        anyhow::bail!("夹");
+    }
+    let buf = resp.error_for_status()?.bytes().await?;
     let reader = image::io::Reader::new(Cursor::new(&buf))
         .with_guessed_format()
         .expect("io read error in Cursor<Vec>?");
@@ -429,7 +435,8 @@ async fn upload_comment_images(
                     }
                     Err(e) => {
                         error!("{}: {}", url, e);
-                        let msg = bot.send_message(db.assets_channel(), url)
+                        let msg = bot
+                            .send_message(db.assets_channel(), url)
                             .is_notification_disabled(true)
                             .call()
                             .await?;
