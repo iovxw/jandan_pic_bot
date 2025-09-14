@@ -25,6 +25,7 @@ const TG_IMAGE_SIZE_LIMIT: usize = 10 * 1000 * 1000;
 const LOW_QUALITY_IMG_SIZE: usize = 200 * 1024;
 const TG_CAPTION_LIMIT: usize = 1024;
 
+#[derive(Debug)]
 struct Image {
     format: image::ImageFormat,
     name: String,
@@ -40,21 +41,27 @@ impl Image {
 }
 
 async fn download_image(url: &str) -> anyhow::Result<Image> {
+    let mut sources = Vec::with_capacity(3);
+    if !url.contains("sinaimg.cn") {
+        sources.push((
+            Cow::from(
+                url.replace("img.toto.im", "tva1.sinaimg.cn")
+                    .replace("tva1.moyu.im", "tva1.sinaimg.cn"),
+            ),
+            "https://weibo.com/",
+        ));
+    }
     let large = url
         .replace("/mw600/", "/large/")
         .replace("/orj360/", "/large/");
-    for (url, referer) in [
-        (
-            Cow::from(large.replace("img.toto.im", "tva1.sinaimg.cn")),
-            "https://weibo.com/",
-        ),
-        (
-            Cow::from(large.replace("tva1.moyu.im", "tva1.sinaimg.cn")),
-            "https://weibo.com/",
-        ),
-        (Cow::from(large), "https://jandan.net/"),
-        (Cow::from(url), "https://jandan.net/"),
-    ] {
+    let referer = if url.contains("sinaimg.cn") {
+        "https://weibo.com/"
+    } else {
+        "https://jandan.net/"
+    };
+    sources.push((Cow::from(large), referer));
+    sources.push((Cow::from(url), referer));
+    for (url, referer) in sources {
         if let Ok(img) = download_image_with_referer(&url, referer).await {
             return Ok(img);
         }
