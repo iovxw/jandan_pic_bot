@@ -46,7 +46,7 @@ async fn download_image(url: &str) -> anyhow::Result<Image> {
         sources.push((
             Cow::from(
                 url.replace("img.toto.im", "tva1.sinaimg.cn")
-                    .replace("tva1.moyu.im", "tva1.sinaimg.cn"),
+                    .replace("moyu.im", "sinaimg.cn"),
             ),
             "https://weibo.com/",
         ));
