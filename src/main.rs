@@ -40,33 +40,76 @@ impl Image {
     }
 }
 
-async fn download_image(url: &str) -> anyhow::Result<Image> {
-    let mut sources = Vec::with_capacity(3);
-    if !url.contains("sinaimg.cn") {
-        sources.push((
-            Cow::from(
-                url.replace("img.toto.im", "tva1.sinaimg.cn")
-                    .replace("moyu.im", "sinaimg.cn"),
-            ),
-            "https://weibo.com/",
-        ));
+/// Returns None if this conversion is a downgrade
+fn upgrade_image_url(
+    url: &str,
+    require_large_image: bool,
+    require_sinaimg: bool,
+) -> Option<(Cow<'_, str>, &'static str)> {
+    let is_large_image = url.contains("/large/");
+    let is_sinaimg = url.contains("sinaimg.cn");
+    if is_large_image && !require_large_image || is_sinaimg && !require_sinaimg {
+        // don't downgrade
+        return None;
     }
-    let large = url
-        .replace("/mw600/", "/large/")
-        .replace("/orj360/", "/large/");
-    let referer = if url.contains("sinaimg.cn") {
+    let referer = if require_sinaimg {
         "https://weibo.com/"
     } else {
         "https://jandan.net/"
     };
-    sources.push((Cow::from(large), referer));
-    sources.push((Cow::from(url), referer));
-    for (url, referer) in sources {
-        if let Ok(img) = download_image_with_referer(&url, referer).await {
-            return Ok(img);
+    let mut url = Cow::from(url);
+    if require_large_image && !is_large_image {
+        url = Cow::from(
+            url.replace("/mw600/", "/large/")
+                .replace("/orj360/", "/large/"),
+        );
+    }
+    if require_sinaimg && !is_sinaimg {
+        url = Cow::from(
+            url.replace("img.toto.im", "tva1.sinaimg.cn")
+                .replace("moyu.im", "sinaimg.cn"),
+        );
+    }
+
+    return Some((url, referer));
+}
+
+#[cfg(test)]
+#[test]
+fn test_upgrade_image_url() {
+    assert_eq!(upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", true, true).unwrap().0,
+        "https://tva1.sinaimg.cn/large/abcd.jpg"
+    );
+    assert_eq!(upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", true, false).unwrap().0,
+        "https://img.toto.im/large/abcd.jpg"
+    );
+    assert_eq!(upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", false, true).unwrap().0,
+        "https://tva1.sinaimg.cn/mw600/abcd.jpg"
+    );
+    assert_eq!(upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", false, false).unwrap().0,
+        "https://img.toto.im/mw600/abcd.jpg"
+    );
+    assert!(upgrade_image_url("https://tva1.sinaimg.cn/large/abcd.jpg", true, true).is_some());
+    assert!(upgrade_image_url("https://tva1.sinaimg.cn/large/abcd.jpg", false, false).is_none());
+    assert!(upgrade_image_url("https://tva1.sinaimg.cn/large/abcd.jpg", true, false).is_none());
+    assert!(upgrade_image_url("https://tva1.sinaimg.cn/large/abcd.jpg", false, true).is_none());
+}
+
+async fn download_image(url: &str) -> anyhow::Result<Image> {
+    let mut errors = Vec::new();
+    for &large_image in &[true, false] {
+        for &sinaimg in &[true, false] {
+            if let Some((url, referer)) =
+                upgrade_image_url(url, large_image, sinaimg)
+            {
+                match download_image_with_referer(&url, referer).await {
+                    Ok(image) => return Ok(image),
+                    Err(e) => errors.push((url, e)),
+                }
+            }
         }
     }
-    anyhow::bail!("Failed to download image from all candidates");
+    anyhow::bail!("Failed to download image from all candidates {:?}", errors);
 }
 
 async fn download_image_with_referer(url: &str, referer: &str) -> anyhow::Result<Image> {
