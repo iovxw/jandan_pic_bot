@@ -60,13 +60,15 @@ fn upgrade_image_url(
     let mut url = Cow::from(url);
     if require_large_image && !is_large_image {
         url = Cow::from(
-            url.replace("/mw600/", "/large/")
+            url.replace("/mw1024/", "/large/")
+                .replace("/mw600/", "/large/")
                 .replace("/orj360/", "/large/"),
         );
     }
     if require_sinaimg && !is_sinaimg {
         url = Cow::from(
-            url.replace("img.toto.im", "tva1.sinaimg.cn")
+            url.replace("img.wangmoyu.com", "tva1.sinaimg.cn")
+                .replace("img.toto.im", "tva1.sinaimg.cn")
                 .replace("moyu.im", "sinaimg.cn"),
         );
     }
@@ -77,16 +79,28 @@ fn upgrade_image_url(
 #[cfg(test)]
 #[test]
 fn test_upgrade_image_url() {
-    assert_eq!(upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", true, true).unwrap().0,
+    assert_eq!(
+        upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", true, true)
+            .unwrap()
+            .0,
         "https://tva1.sinaimg.cn/large/abcd.jpg"
     );
-    assert_eq!(upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", true, false).unwrap().0,
+    assert_eq!(
+        upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", true, false)
+            .unwrap()
+            .0,
         "https://img.toto.im/large/abcd.jpg"
     );
-    assert_eq!(upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", false, true).unwrap().0,
+    assert_eq!(
+        upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", false, true)
+            .unwrap()
+            .0,
         "https://tva1.sinaimg.cn/mw600/abcd.jpg"
     );
-    assert_eq!(upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", false, false).unwrap().0,
+    assert_eq!(
+        upgrade_image_url("https://img.toto.im/mw600/abcd.jpg", false, false)
+            .unwrap()
+            .0,
         "https://img.toto.im/mw600/abcd.jpg"
     );
     assert!(upgrade_image_url("https://tva1.sinaimg.cn/large/abcd.jpg", true, true).is_some());
@@ -99,9 +113,7 @@ async fn download_image(url: &str) -> anyhow::Result<Image> {
     let mut errors = Vec::new();
     for &large_image in &[true, false] {
         for &sinaimg in &[true, false] {
-            if let Some((url, referer)) =
-                upgrade_image_url(url, large_image, sinaimg)
-            {
+            if let Some((url, referer)) = upgrade_image_url(url, large_image, sinaimg) {
                 match download_image_with_referer(&url, referer).await {
                     Ok(image) => return Ok(image),
                     Err(e) => errors.push((url, e)),
