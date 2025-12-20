@@ -138,7 +138,7 @@ async fn download_image_with_referer(url: &str, referer: &str) -> anyhow::Result
         .expect("not cannot-be-a-base URL")
         .last()
         .expect("always has one path segment");
-    if retrieved_filename.starts_with("default_d_w_") {
+    if retrieved_filename.starts_with("default_") {
         anyhow::bail!("夹");
     }
     let buf = resp.error_for_status()?.bytes().await?;
