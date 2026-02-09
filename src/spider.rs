@@ -153,11 +153,11 @@ fn parse_comment(s: String) -> RichText {
                 }
             ),
             (
-                Regex::new(r#"<a .*data-id="(?P<id>\d+)".*>(?P<at>[^<]*)</a>"#).unwrap(),
+                Regex::new(r#"#@\[(?P<name>[^\]]+)\](?P<id>\d+)#"#).unwrap(),
                 |c| {
                     EntityRange::Mention {
                         range: c.get(0).unwrap().range(),
-                        name: c.name("at").expect("missing 'at' in regex").range(),
+                        name: c.name("name").expect("missing 'name' in regex").range(),
                         id: c
                             .name("id")
                             .expect("missing 'id' in regex")
@@ -207,8 +207,8 @@ fn parse_comment(s: String) -> RichText {
 
 fn extract_mentions(comment: &str) -> Vec<u64> {
     lazy_static! {
-        // <a href="#tucao-12116426" data-id="12116426" class="tucao-link">
-        static ref MENTIONS: Regex = Regex::new(r#"<a .*data-id="(?P<id>\d+)".*>"#).unwrap();
+        // #@[name]12345#
+        static ref MENTIONS: Regex = Regex::new(r#"#@\[(?P<name>[^\]]+)\](?P<id>\d+)#"#).unwrap();
     }
     MENTIONS
         .captures_iter(comment)
@@ -340,7 +340,7 @@ mod test {
 
     #[test]
     fn rich_text() {
-        let s = r##"<a href="#tucao-123" data-id="123" class="tucao-link">@name</a> COMMENT <img src="link" /><br>"##;
+        let s = r##"#@[name]123# COMMENT <img src="link" /><br>"##;
         let r = parse_comment(s.to_string());
         let r = r.entities().collect::<Vec<_>>();
         use TextEntity::*;
@@ -348,7 +348,7 @@ mod test {
             r,
             vec![
                 Mention {
-                    name: "@name",
+                    name: "name",
                     id: 123
                 },
                 Text(" COMMENT ",),
