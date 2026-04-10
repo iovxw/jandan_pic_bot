@@ -32,7 +32,7 @@ async fn request<F: Fn(&reqwest::Client) -> reqwest::RequestBuilder>(
                     e.url(),
                     attempt
                 );
-                tokio::time::delay_for(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
             Err(e) => return Err(e),
         }

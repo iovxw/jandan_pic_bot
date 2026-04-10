@@ -51,7 +51,7 @@ impl AVFrameIter {
 fn decode_video(input_format_context: AVFormatContextInput) -> Result<AVFrameIter> {
     let (stream_index, decode_context) = {
         let (stream_index, decoder) = input_format_context
-            .find_best_stream(ffi::AVMediaType_AVMEDIA_TYPE_VIDEO)?
+            .find_best_stream(ffi::AVMEDIA_TYPE_VIDEO)?
             .context("Failed to find the best stream")?;
         let stream = input_format_context.streams().get(stream_index).unwrap();
 
@@ -152,8 +152,10 @@ fn input_format_context(data: Vec<u8>) -> Result<AVFormatContextInput> {
 #[allow(clippy::type_complexity)]
 fn output_format_context() -> Result<(AVFormatContextOutput, Arc<Mutex<Cursor<Vec<u8>>>>)> {
     let (io_context, data) = io_context_custom(Vec::new(), true)?;
-    let output_format_context =
-        AVFormatContextOutput::create(c".mp4", Some(AVIOContextContainer::Custom(io_context)))?;
+    let output_format_context = AVFormatContextOutput::builder()
+        .io_context(AVIOContextContainer::Custom(io_context))
+        .format_name(c"mp4")
+        .build()?;
 
     Ok((output_format_context, data))
 }
@@ -171,7 +173,7 @@ fn encode_mp4(mut src: AVFrameIter) -> Result<Vec<u8>> {
         } = (*first_frame).deref();
         let dst_width = src_width + src_width % 2;
         let dst_height = src_height + src_height % 2;
-        let dst_format = ffi::AVPixelFormat_AV_PIX_FMT_YUV420P;
+        let dst_format = ffi::AV_PIX_FMT_YUV420P;
 
         let (mut output_format_context, buffer) = output_format_context()?;
 
@@ -224,6 +226,9 @@ fn encode_mp4(mut src: AVFrameIter) -> Result<Vec<u8>> {
                     dst_height,
                     dst_format,
                     ffi::SWS_FAST_BILINEAR | ffi::SWS_ACCURATE_RND,
+                    None,
+                    None,
+                    None,
                 )
                 .context("Failed to get sws_context")?;
                 Some(sws_context)
@@ -293,7 +298,7 @@ fn encode_write_frame(
 
         match output_format_context.interleaved_write_frame(&mut packet) {
             Ok(()) => Ok(()),
-            Err(RsmpegError::InterleavedWriteFrameError(-22)) => Ok(()),
+            Err(RsmpegError::AVError(-22)) => Ok(()),
             Err(e) => Err(e),
         }?;
     }

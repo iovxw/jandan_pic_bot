@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tbot::types::parameters::ChatId;
+use teloxide::types::Recipient;
 use tokio::fs;
 
 #[derive(Deserialize, Serialize)]
@@ -28,11 +28,11 @@ impl Database {
         fs::write(&self.file, s).await?;
         Ok(())
     }
-    pub fn channel(&self) -> ChatId<'_> {
-        self.channel.as_str().into()
+    pub fn channel(&self) -> Recipient {
+        Recipient::ChannelUsername(self.channel.clone())
     }
-    pub fn assets_channel(&self) -> ChatId<'_> {
-        self.assets_channel.as_str().into()
+    pub fn assets_channel(&self) -> Recipient {
+        Recipient::ChannelUsername(self.assets_channel.clone())
     }
     pub fn get_img(&self, url: &str) -> Option<String> {
         self.imgs.get(url).map(|id| {

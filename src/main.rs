@@ -1,15 +1,17 @@
 use std::borrow::Cow;
 use std::fmt::Write as _;
-use std::fs::File; // FIXME: replace after tokio 0.2 -> 1.0
+use std::fs::File;
 use std::io::{Cursor, Read, Write as _};
 use std::time::Duration;
 
 use convert::video_to_mp4;
 use futures::prelude::*;
 use log::error;
-use tbot::types::{
-    input_file::{Document, GroupMedia, Photo, Video},
-    parameters::{ChatId, Text},
+use teloxide::prelude::*;
+use teloxide::requests::Requester;
+use teloxide::types::{
+    InputFile, InputMedia, InputMediaDocument, InputMediaPhoto, InputMediaVideo,
+    LinkPreviewOptions, ParseMode, Recipient, ReplyParameters,
 };
 
 mod convert;
@@ -73,7 +75,7 @@ fn upgrade_image_url(
         );
     }
 
-    return Some((url, referer));
+    Some((url, referer))
 }
 
 #[cfg(test)]
@@ -127,8 +129,7 @@ async fn download_image(url: &str) -> anyhow::Result<Image> {
 async fn download_image_with_referer(url: &str, referer: &str) -> anyhow::Result<Image> {
     let file_name = reqwest::Url::parse(url)?
         .path_segments()
-        .map(|s| s.last())
-        .flatten()
+        .and_then(|mut s| s.next_back())
         .unwrap_or_default()
         .into();
     let resp = http::get_with_referer(url, referer).await?;
@@ -136,13 +137,13 @@ async fn download_image_with_referer(url: &str, referer: &str) -> anyhow::Result
         .url()
         .path_segments()
         .expect("not cannot-be-a-base URL")
-        .last()
+        .next_back()
         .expect("always has one path segment");
     if retrieved_filename.starts_with("default_") {
         anyhow::bail!("夹");
     }
     let buf = resp.error_for_status()?.bytes().await?;
-    let reader = image::io::Reader::new(Cursor::new(&buf))
+    let reader = image::ImageReader::new(Cursor::new(&buf))
         .with_guessed_format()
         .expect("io read error in Cursor<Vec>?");
     let format = reader.format().ok_or_else(|| {
@@ -160,10 +161,38 @@ async fn download_image_with_referer(url: &str, referer: &str) -> anyhow::Result
 
 // TODO: CoW
 fn telegram_md_escape(s: &str) -> String {
-    s.replace("[", "\\[")
-        .replace("*", "\\*")
-        .replace("_", "\\_")
-        .replace("`", "\\`")
+    let mut r = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(
+            c,
+            '_' | '*'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '~'
+                | '`'
+                | '>'
+                | '#'
+                | '+'
+                | '-'
+                | '='
+                | '|'
+                | '{'
+                | '}'
+                | '.'
+                | '!'
+                | '\\'
+        ) {
+            r.push('\\');
+        }
+        r.push(c);
+    }
+    r
+}
+
+fn telegram_md_escape_url(s: &str) -> String {
+    s.replace('\\', "\\\\").replace(')', "\\)")
 }
 
 #[tokio::main]
@@ -171,7 +200,7 @@ async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let mut db = database::Database::open("db.json").await?;
-    let bot = tbot::Bot::new(db.token.clone());
+    let bot = teloxide::Bot::new(db.token.clone());
     let mut history_file = File::options().read(true).append(true).open(HISTORY_FILE)?;
 
     let mut buf = String::new();
@@ -189,7 +218,7 @@ async fn main() -> anyhow::Result<()> {
         new_pics.push(pic.id);
     }
     history.extend(new_pics.iter().map(String::as_str));
-    let fresh_start = history.len().checked_sub(HISTORY_SOFT_LIMIT).unwrap_or(0);
+    let fresh_start = history.len().saturating_sub(HISTORY_SOFT_LIMIT);
     // truncate history
     // TODO: FALLOC_FL_COLLAPSE_RANGE
     std::fs::write(HISTORY_FILE, history[fresh_start..].join("\n"))?;
@@ -202,7 +231,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn send_pic(
-    bot: &tbot::Bot,
+    bot: &teloxide::Bot,
     db: &database::Database,
     pic: &spider::Pic,
 ) -> anyhow::Result<()> {
@@ -211,17 +240,12 @@ async fn send_pic(
         .collect()
         .await;
 
-    let captions = format_caption(db, pic);
-    let mut captions = captions
-        .iter()
-        .map(String::as_str)
-        .map(Text::with_markdown)
-        .collect();
+    let mut captions: Vec<String> = format_caption(db, pic);
     let contains_error = images.iter().any(|r| r.is_err());
     let contains_large_image = images
         .iter()
         .filter_map(|r| r.as_ref().ok())
-        .any(|img| image_too_large(img));
+        .any(image_too_large);
     let contains_gif = images
         .iter()
         .filter_map(|r| r.as_ref().ok())
@@ -238,17 +262,24 @@ async fn send_pic(
         if images.len() == 1 {
             let img: Image = images.into_iter().find_map(|x| x.ok()).unwrap();
             let caption = captions.remove(0);
-            let doc = Document::with_bytes(&img.name, &img.data).caption(caption);
+            let doc = InputFile::memory(img.data).file_name(img.name);
             let first_msg = bot
                 .send_document(db.channel(), doc)
-                .is_notification_disabled(true)
-                .call()
+                .caption(caption)
+                .parse_mode(ParseMode::MarkdownV2)
+                .disable_notification(true)
                 .await?;
             for caption in captions {
                 bot.send_message(db.channel(), caption)
-                    .is_web_page_preview_disabled(true)
-                    .in_reply_to(first_msg.id)
-                    .call()
+                    .parse_mode(ParseMode::MarkdownV2)
+                    .link_preview_options(LinkPreviewOptions {
+                        is_disabled: true,
+                        url: None,
+                        prefer_small_media: false,
+                        prefer_large_media: false,
+                        show_above_text: false,
+                    })
+                    .reply_parameters(ReplyParameters::new(first_msg.id))
                     .await?;
             }
         } else {
@@ -267,39 +298,39 @@ async fn send_pic(
 
 #[allow(unused)]
 async fn send_as_document_group(
-    bot: &tbot::Bot,
-    target: ChatId<'_>,
+    bot: &teloxide::Bot,
+    target: Recipient,
     images: Vec<Image>,
-    caption: Text<'_>,
+    caption: String,
 ) -> anyhow::Result<()> {
     assert!(!images.is_empty());
-    let mut first = true;
-    let group: Vec<GroupMedia> = images
-        .iter()
-        .map(|img| {
-            if first {
-                first = false;
-                let doc = Document::with_bytes(&img.name, &img.data).caption(caption);
-                todo!("tbot doesn't support ducoment as group")
+    let group: Vec<InputMedia> = images
+        .into_iter()
+        .enumerate()
+        .map(|(i, img)| {
+            let doc = InputMediaDocument::new(InputFile::memory(img.data).file_name(img.name));
+            if i == 0 {
+                InputMedia::Document(
+                    doc.caption(caption.clone())
+                        .parse_mode(ParseMode::MarkdownV2),
+                )
             } else {
-                let doc = Document::with_bytes(&img.name, &img.data);
-                todo!("tbot doesn't support ducoment as group")
+                InputMedia::Document(doc)
             }
         })
         .collect();
-    bot.send_media_group(target, &group)
-        .is_notification_disabled(true)
-        .call()
+    bot.send_media_group(target, group)
+        .disable_notification(true)
         .await?;
 
     Ok(())
 }
 
 async fn send_as_photo_group(
-    bot: &tbot::Bot,
-    target: ChatId<'_>,
+    bot: &teloxide::Bot,
+    target: Recipient,
     images: Vec<Image>,
-    mut captions: Vec<Text<'_>>,
+    mut captions: Vec<String>,
 ) -> anyhow::Result<()> {
     assert!(!images.is_empty());
     enum Or {
@@ -317,33 +348,45 @@ async fn send_as_photo_group(
         })
         .collect::<Result<_, _>>()?;
     let caption = captions.remove(0);
-    let mut first = true;
-    let group: Vec<GroupMedia> = data
-        .iter()
-        .map(|d| match (d, first) {
-            (Or::Video(v), true) => {
-                first = false;
-                Video::with_bytes(v).caption(caption).into()
+    let group: Vec<InputMedia> = data
+        .into_iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let (file, is_video) = match d {
+                Or::Video(v) => (InputFile::memory(v), true),
+                Or::Photo(p) => (InputFile::memory(p), false),
+            };
+            if is_video {
+                let mut m = InputMediaVideo::new(file);
+                if i == 0 {
+                    m = m.caption(caption.clone()).parse_mode(ParseMode::MarkdownV2);
+                }
+                InputMedia::Video(m)
+            } else {
+                let mut m = InputMediaPhoto::new(file);
+                if i == 0 {
+                    m = m.caption(caption.clone()).parse_mode(ParseMode::MarkdownV2);
+                }
+                InputMedia::Photo(m)
             }
-            (Or::Photo(p), true) => {
-                first = false;
-                Photo::with_bytes(p).caption(caption).into()
-            }
-            (Or::Video(v), false) => Video::with_bytes(v).into(),
-            (Or::Photo(p), false) => Photo::with_bytes(p).into(),
         })
         .collect();
     let first_msg = bot
-        .send_media_group(target, &group)
-        .is_notification_disabled(true)
-        .call()
+        .send_media_group(target.clone(), group)
+        .disable_notification(true)
         .await?;
-    let first_msg_id = first_msg.get(0).expect("tg return 0 msg").id;
+    let first_msg_id = first_msg.first().expect("tg return 0 msg").id;
     for caption in captions {
-        bot.send_message(target, caption)
-            .is_web_page_preview_disabled(true)
-            .in_reply_to(first_msg_id)
-            .call()
+        bot.send_message(target.clone(), caption)
+            .parse_mode(ParseMode::MarkdownV2)
+            .link_preview_options(LinkPreviewOptions {
+                is_disabled: true,
+                url: None,
+                prefer_small_media: false,
+                prefer_large_media: false,
+                show_above_text: false,
+            })
+            .reply_parameters(ReplyParameters::new(first_msg_id))
             .await?;
     }
 
@@ -351,63 +394,71 @@ async fn send_as_photo_group(
 }
 
 async fn upload_single_image(
-    bot: &tbot::Bot,
-    target: ChatId<'_>,
+    bot: &teloxide::Bot,
+    target: Recipient,
     img: Image,
-) -> anyhow::Result<tbot::types::Message> {
+) -> anyhow::Result<teloxide::types::Message> {
     let msg = if img.is_gif() {
         let mp4 = video_to_mp4(img.data)?;
-        bot.send_video(target, Video::with_bytes(&mp4))
-            .is_notification_disabled(true)
-            .call()
+        bot.send_video(target, InputFile::memory(mp4))
+            .disable_notification(true)
             .await?
     } else if image_too_large(&img) {
-        bot.send_document(target, Document::with_bytes(&img.name, &img.data))
-            .is_notification_disabled(true)
-            .call()
+        bot.send_document(target, InputFile::memory(img.data).file_name(img.name))
+            .disable_notification(true)
             .await?
     } else {
-        bot.send_photo(target, Photo::with_bytes(&img.data))
-            .is_notification_disabled(true)
-            .call()
+        bot.send_photo(target, InputFile::memory(img.data))
+            .disable_notification(true)
             .await?
     };
     Ok(msg)
 }
 
 async fn send_the_old_way(
-    bot: &tbot::Bot,
-    target: ChatId<'_>,
+    bot: &teloxide::Bot,
+    target: Recipient,
     images: Vec<Result<Image, (anyhow::Error, &'_ str)>>,
-    mut captions: Vec<Text<'_>>,
+    mut captions: Vec<String>,
 ) -> anyhow::Result<()> {
     for img_result in images {
         match img_result {
             Ok(img) => {
-                upload_single_image(bot, target, img).await?;
+                upload_single_image(bot, target.clone(), img).await?;
             }
             Err((e, img_url)) => {
                 error!("{}: {}", img_url, e);
-                bot.send_message(target, &*img_url)
-                    .is_notification_disabled(true)
-                    .call()
+                bot.send_message(target.clone(), img_url)
+                    .disable_notification(true)
                     .await?;
             }
         }
 
-        tokio::time::delay_for(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_secs(3)).await;
     }
     let caption = captions.remove(0);
     let first_msg = bot
-        .send_message(target, caption)
-        .is_web_page_preview_disabled(true)
-        .call()
+        .send_message(target.clone(), caption)
+        .parse_mode(ParseMode::MarkdownV2)
+        .link_preview_options(LinkPreviewOptions {
+            is_disabled: true,
+            url: None,
+            prefer_small_media: false,
+            prefer_large_media: false,
+            show_above_text: false,
+        })
         .await?;
     for caption in captions {
-        bot.send_message(target, caption)
-            .is_web_page_preview_disabled(true)
-            .in_reply_to(first_msg.id)
-            .call()
+        bot.send_message(target.clone(), caption)
+            .parse_mode(ParseMode::MarkdownV2)
+            .link_preview_options(LinkPreviewOptions {
+                is_disabled: true,
+                url: None,
+                prefer_small_media: false,
+                prefer_large_media: false,
+                show_above_text: false,
+            })
+            .reply_parameters(ReplyParameters::new(first_msg.id))
             .await?;
     }
     Ok(())
@@ -421,9 +472,10 @@ fn image_too_large(img: &Image) -> bool {
 
 fn format_caption(db: &database::Database, pic: &spider::Pic) -> Vec<String> {
     let mut msg = format!(
-        "*{}*: https://jandan.net/t/{}\n",
-        pic.author.replace("*", ""),
-        pic.id,
+        "*{}*: [jandan\\.net/t/{}](https://jandan.net/t/{})\n",
+        telegram_md_escape(&pic.author.replace('*', "")),
+        telegram_md_escape(&pic.id),
+        telegram_md_escape_url(&pic.id),
     );
     if !pic.text.is_empty() {
         msg.push_str(&telegram_md_escape(&pic.text));
@@ -435,7 +487,7 @@ fn format_caption(db: &database::Database, pic: &spider::Pic) -> Vec<String> {
         let msg = msgs.last_mut().expect("never");
         let formatted = format!(
             "\n*{}*: {}\n*OO*: {}, *XX*: {}",
-            &comment.author.replace("*", ""),
+            telegram_md_escape(&comment.author.replace('*', "")),
             comment_to_tg_md(db, &comment.content),
             comment.oo,
             comment.xx
@@ -458,14 +510,21 @@ fn comment_to_tg_md(db: &database::Database, comment: &spider::RichText) -> Stri
             Br => r.push('\n'),
             Img(url) => {
                 if let Some(tg_link) = db.get_img(url) {
-                    write!(r, "[［图片］]({})", tg_link).expect("never fail");
+                    write!(r, "[［图片］]({})", telegram_md_escape_url(&tg_link))
+                        .expect("never fail");
                 } else {
                     r.push_str(&telegram_md_escape(url))
                 }
             }
             Mention { name, id } => {
                 if let Some(msg_link) = db.get_comment(id) {
-                    write!(r, "[{}]({})", name, msg_link).expect("never fail");
+                    write!(
+                        r,
+                        "[{}]({})",
+                        telegram_md_escape(name),
+                        telegram_md_escape_url(&msg_link)
+                    )
+                    .expect("never fail");
                 } else {
                     r.push_str(&telegram_md_escape(name))
                 }
@@ -476,7 +535,7 @@ fn comment_to_tg_md(db: &database::Database, comment: &spider::RichText) -> Stri
 }
 
 async fn upload_comment_images(
-    bot: &tbot::Bot,
+    bot: &teloxide::Bot,
     db: &mut database::Database,
     c: &spider::Comments,
 ) -> Result<(), anyhow::Error> {
@@ -493,16 +552,15 @@ async fn upload_comment_images(
                 match download_image(url).await {
                     Ok(img) => {
                         let msg = upload_single_image(bot, db.assets_channel(), img).await?;
-                        db.put_img(url.to_string(), msg.id.0.into()).await;
+                        db.put_img(url.to_string(), msg.id.0 as u64).await;
                     }
                     Err(e) => {
                         error!("{}: {}", url, e);
                         let msg = bot
                             .send_message(db.assets_channel(), url)
-                            .is_notification_disabled(true)
-                            .call()
+                            .disable_notification(true)
                             .await?;
-                        db.put_img(url.to_string(), msg.id.0.into()).await;
+                        db.put_img(url.to_string(), msg.id.0 as u64).await;
                     }
                 }
             }
@@ -512,7 +570,7 @@ async fn upload_comment_images(
 }
 
 async fn upload_comment_mentions(
-    bot: &tbot::Bot,
+    bot: &teloxide::Bot,
     db: &mut database::Database,
     c: &spider::Comments,
 ) -> Result<(), anyhow::Error> {
@@ -523,7 +581,7 @@ async fn upload_comment_mentions(
         let text = if let Some(comment) = comment {
             format!(
                 "*{}*: {}\n*OO*: {}, *XX*: {}",
-                &comment.author.replace("*", ""),
+                telegram_md_escape(&comment.author.replace('*', "")),
                 comment_to_tg_md(db, &comment.content),
                 comment.oo,
                 comment.xx
@@ -533,11 +591,11 @@ async fn upload_comment_mentions(
         };
 
         let msg = bot
-            .send_message(db.assets_channel(), Text::with_markdown(&text))
-            .is_notification_disabled(true)
-            .call()
+            .send_message(db.assets_channel(), text)
+            .parse_mode(ParseMode::MarkdownV2)
+            .disable_notification(true)
             .await?;
-        db.put_comment(id, msg.id.0.into()).await;
+        db.put_comment(id, msg.id.0 as u64).await;
     }
     Ok(())
 }

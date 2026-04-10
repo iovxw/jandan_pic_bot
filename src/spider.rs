@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::LazyLock;
 use std::{borrow::Cow, collections::BTreeMap};
 
-use lazy_static::lazy_static;
 use marksman_escape::Unescape;
 use regex::Regex;
 use scraper::{Html, Selector};
@@ -76,7 +76,7 @@ where
     struct BorrowCow<'a>(#[serde(borrow)] Cow<'a, str>);
     let s = BorrowCow::deserialize(deserializer)?.0;
     String::from_utf8(Unescape::new(s.bytes()).collect::<Vec<u8>>())
-        .map_err(|e| serde::de::Error::custom(e))
+        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,21 +141,22 @@ pub enum TextEntity<'a> {
 }
 
 fn parse_comment(s: String) -> RichText {
-    lazy_static! {
-        static ref RULES: [(Regex, fn(m: regex::Captures) -> EntityRange); 3] = [
-            (
-                Regex::new(r#"<img src="(?P<img>[^"]+)" />"#).unwrap(),
-                |c| -> EntityRange {
-                    EntityRange::Img {
-                        range: c.get(0).unwrap().range(),
-                        url: c.name("img").expect("missing 'img' in regex").range(),
-                    }
-                }
-            ),
-            (
-                Regex::new(r#"#@\[(?P<name>[^\]]+)\](?P<id>\d+)#"#).unwrap(),
-                |c| {
-                    EntityRange::Mention {
+    #[allow(clippy::type_complexity)]
+    static RULES: LazyLock<[(Regex, fn(m: regex::Captures) -> EntityRange); 3]> =
+        LazyLock::new(|| {
+            [
+                (
+                    Regex::new(r#"<img src="(?P<img>[^"]+)" />"#).unwrap(),
+                    |c| -> EntityRange {
+                        EntityRange::Img {
+                            range: c.get(0).unwrap().range(),
+                            url: c.name("img").expect("missing 'img' in regex").range(),
+                        }
+                    },
+                ),
+                (
+                    Regex::new(r#"#@\[(?P<name>[^\]]+)\](?P<id>\d+)#"#).unwrap(),
+                    |c| EntityRange::Mention {
                         range: c.get(0).unwrap().range(),
                         name: c.name("name").expect("missing 'name' in regex").range(),
                         id: c
@@ -164,21 +165,17 @@ fn parse_comment(s: String) -> RichText {
                             .as_str()
                             .parse()
                             .expect("data-id format changed"),
-                    }
-                }
-            ),
-            (Regex::new("<br>").unwrap(), |c| {
-                EntityRange::Br {
+                    },
+                ),
+                (Regex::new("<br>").unwrap(), |c| EntityRange::Br {
                     range: c.get(0).unwrap().range(),
-                }
-            })
-        ];
-    }
+                }),
+            ]
+        });
 
     let mut entities: Vec<EntityRange> = RULES
         .iter()
-        .map(|(reg, f)| reg.captures_iter(&s).map(f))
-        .flatten()
+        .flat_map(|(reg, f)| reg.captures_iter(&s).map(f))
         .collect();
     entities.sort_by_key(|e| e.range().start);
     let len_freezed: i128 = entities.len().try_into().expect("overflow");
@@ -206,10 +203,10 @@ fn parse_comment(s: String) -> RichText {
 }
 
 fn extract_mentions(comment: &str) -> Vec<u64> {
-    lazy_static! {
+    static MENTIONS: LazyLock<Regex> = LazyLock::new(|| {
         // #@[name]12345#
-        static ref MENTIONS: Regex = Regex::new(r#"#@\[(?P<name>[^\]]+)\](?P<id>\d+)#"#).unwrap();
-    }
+        Regex::new(r#"#@\[(?P<name>[^\]]+)\](?P<id>\d+)#"#).unwrap()
+    });
     MENTIONS
         .captures_iter(comment)
         .map(|c| c.name("id").expect("bug in regex").as_str())
@@ -255,16 +252,15 @@ async fn get_comments(id: u64) -> anyhow::Result<Comments> {
     let mut mentions: BTreeMap<u64, Option<Comment>> = BTreeMap::new();
     let mut id_stack: Vec<_> = hot
         .iter()
-        .map(|c| c.mentions.iter().map(|x| *x))
-        .flatten()
+        .flat_map(|c| c.mentions.iter().copied())
         .collect();
     while let Some(id) = id_stack.pop() {
         if let Some(t) = tucao.remove(&id) {
             let c: Comment = t.into();
             id_stack.extend_from_slice(&c.mentions);
             mentions.insert(c.id, Some(c));
-        } else if !mentions.contains_key(&id) {
-            mentions.insert(id, None);
+        } else {
+            mentions.entry(id).or_insert(None);
         }
     }
     Ok(Comments { hot, mentions })
