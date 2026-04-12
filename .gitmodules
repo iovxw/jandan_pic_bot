@@ -1,3 +1,0 @@
-[submodule "rusty_ffmpeg"]
-	path = rusty_ffmpeg
-	url = https://github.com/CCExtractor/rusty_ffmpeg
