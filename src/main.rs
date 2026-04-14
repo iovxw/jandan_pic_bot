@@ -213,6 +213,7 @@ async fn main() -> anyhow::Result<()> {
         upload_comment_images(&bot, &mut db, &pic.comments).await?;
         upload_comment_mentions(&bot, &mut db, &pic.comments).await?;
         send_pic(&bot, &db, &pic).await?;
+        tokio::time::sleep(Duration::from_secs(3)).await;
 
         write!(history_file, "\n{}", pic.id)?;
         new_pics.push(pic.id);
@@ -240,7 +241,7 @@ async fn send_pic(
         .collect()
         .await;
 
-    let mut captions: Vec<String> = format_caption(db, pic);
+    let captions: Vec<String> = format_caption(db, pic);
     let contains_error = images.iter().any(|r| r.is_err());
     let contains_large_image = images
         .iter()
@@ -250,129 +251,59 @@ async fn send_pic(
         .iter()
         .filter_map(|r| r.as_ref().ok())
         .any(|img| img.is_gif());
-    if images.is_empty() || contains_error || contains_large_image && contains_gif {
+    if images.is_empty() || contains_error || (contains_large_image && contains_gif) {
+        dbg!(contains_error, contains_large_image, contains_gif);
         send_the_old_way(bot, db.channel(), images, captions).await?;
         return Ok(());
     }
     assert!(!images.is_empty());
-    if contains_large_image {
-        assert!(!contains_gif);
-        // TODO: replace with:
-        // send_as_document_group(bot, target, images, captions).await?;
-        if images.len() == 1 {
-            let img: Image = images.into_iter().find_map(|x| x.ok()).unwrap();
-            let caption = captions.remove(0);
-            let doc = InputFile::memory(img.data).file_name(img.name);
-            let first_msg = bot
-                .send_document(db.channel(), doc)
-                .caption(caption)
-                .parse_mode(ParseMode::MarkdownV2)
-                .disable_notification(true)
-                .await?;
-            for caption in captions {
-                bot.send_message(db.channel(), caption)
-                    .parse_mode(ParseMode::MarkdownV2)
-                    .link_preview_options(LinkPreviewOptions {
-                        is_disabled: true,
-                        url: None,
-                        prefer_small_media: false,
-                        prefer_large_media: false,
-                        show_above_text: false,
-                    })
-                    .reply_parameters(ReplyParameters::new(first_msg.id))
-                    .await?;
-            }
-        } else {
-            send_the_old_way(bot, db.channel(), images, captions).await?;
-        }
-    } else {
-        let images: Vec<Image> = images
-            .into_iter()
-            .map(|r| r.expect("error not filtered out, check the logic"))
-            .collect();
-
-        send_as_photo_group(bot, db.channel(), images, captions).await?;
-    }
-    Ok(())
-}
-
-#[allow(unused)]
-async fn send_as_document_group(
-    bot: &teloxide::Bot,
-    target: Recipient,
-    images: Vec<Image>,
-    caption: String,
-) -> anyhow::Result<()> {
-    assert!(!images.is_empty());
-    let group: Vec<InputMedia> = images
+    let images: Vec<Image> = images
         .into_iter()
-        .enumerate()
-        .map(|(i, img)| {
-            let doc = InputMediaDocument::new(InputFile::memory(img.data).file_name(img.name));
-            if i == 0 {
-                InputMedia::Document(
-                    doc.caption(caption.clone())
-                        .parse_mode(ParseMode::MarkdownV2),
-                )
-            } else {
-                InputMedia::Document(doc)
-            }
-        })
+        .map(|r| r.expect("error not filtered out, check the logic"))
         .collect();
-    bot.send_media_group(target, group)
-        .disable_notification(true)
-        .await?;
 
+    send_as_group(bot, db.channel(), images, captions).await?;
     Ok(())
 }
 
-async fn send_as_photo_group(
+async fn send_as_group(
     bot: &teloxide::Bot,
     target: Recipient,
     images: Vec<Image>,
     mut captions: Vec<String>,
 ) -> anyhow::Result<()> {
     assert!(!images.is_empty());
-    enum Or {
-        Video(Vec<u8>),
-        Photo(Vec<u8>),
-    }
-    let data: Vec<_> = images
-        .into_iter()
-        .map(|img| {
-            if img.is_gif() {
-                video_to_mp4(img.data).map(Or::Video)
-            } else {
-                Ok(Or::Photo(img.data))
-            }
-        })
-        .collect::<Result<_, _>>()?;
     let caption = captions.remove(0);
-    let group: Vec<InputMedia> = data
+    let last = images.len() - 1;
+    let contains_large_image = images.iter().any(image_too_large);
+    let data: Vec<InputMedia> = images
         .into_iter()
         .enumerate()
-        .map(|(i, d)| {
-            let (file, is_video) = match d {
-                Or::Video(v) => (InputFile::memory(v), true),
-                Or::Photo(p) => (InputFile::memory(p), false),
-            };
-            if is_video {
-                let mut m = InputMediaVideo::new(file);
-                if i == 0 {
-                    m = m.caption(caption.clone()).parse_mode(ParseMode::MarkdownV2);
+        .map(|(i, img)| {
+            if contains_large_image {
+                let mut f =
+                    InputMediaDocument::new(InputFile::memory(img.data).file_name(img.name));
+                if i == last {
+                    f = f.caption(caption.clone()).parse_mode(ParseMode::MarkdownV2)
                 }
-                InputMedia::Video(m)
+                Ok(InputMedia::Document(f))
+            } else if img.is_gif() {
+                let mut f = InputMediaVideo::new(InputFile::memory(video_to_mp4(img.data)?));
+                if i == last {
+                    f = f.caption(caption.clone()).parse_mode(ParseMode::MarkdownV2)
+                }
+                Ok(InputMedia::Video(f))
             } else {
-                let mut m = InputMediaPhoto::new(file);
-                if i == 0 {
-                    m = m.caption(caption.clone()).parse_mode(ParseMode::MarkdownV2);
+                let mut f = InputMediaPhoto::new(InputFile::memory(img.data).file_name(img.name));
+                if i == last {
+                    f = f.caption(caption.clone()).parse_mode(ParseMode::MarkdownV2)
                 }
-                InputMedia::Photo(m)
+                Ok(InputMedia::Photo(f))
             }
         })
-        .collect();
+        .collect::<anyhow::Result<_>>()?;
     let first_msg = bot
-        .send_media_group(target.clone(), group)
+        .send_media_group(target.clone(), data)
         .disable_notification(true)
         .await?;
     let first_msg_id = first_msg.first().expect("tg return 0 msg").id;
