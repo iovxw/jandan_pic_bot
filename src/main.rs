@@ -243,17 +243,16 @@ async fn send_pic(
 
     let captions: Vec<String> = format_caption(db, pic);
     let contains_error = images.iter().any(|r| r.is_err());
-    let contains_large_image = images
+    let send_as_document = images
         .iter()
         .filter_map(|r| r.as_ref().ok())
-        .any(image_too_large);
+        .any(should_send_as_document);
     let contains_gif = images
         .iter()
         .filter_map(|r| r.as_ref().ok())
         .any(|img| img.is_gif());
-    if images.is_empty() || contains_error || (contains_large_image && contains_gif) {
-        dbg!(contains_error, contains_large_image, contains_gif);
-        send_the_old_way(bot, db.channel(), images, captions).await?;
+    if images.is_empty() || contains_error || (send_as_document && contains_gif) {
+        send_images_individually(bot, db.channel(), images, captions).await?;
         return Ok(());
     }
     assert!(!images.is_empty());
@@ -275,12 +274,12 @@ async fn send_as_group(
     assert!(!images.is_empty());
     let caption = captions.remove(0);
     let last = images.len() - 1;
-    let contains_large_image = images.iter().any(image_too_large);
+    let send_as_document = images.iter().any(should_send_as_document);
     let data: Vec<InputMedia> = images
         .into_iter()
         .enumerate()
         .map(|(i, img)| {
-            if contains_large_image {
+            if send_as_document {
                 let mut f =
                     InputMediaDocument::new(InputFile::memory(img.data).file_name(img.name));
                 if i == last {
@@ -334,7 +333,7 @@ async fn upload_single_image(
         bot.send_video(target, InputFile::memory(mp4))
             .disable_notification(true)
             .await?
-    } else if image_too_large(&img) {
+    } else if should_send_as_document(&img) {
         bot.send_document(target, InputFile::memory(img.data).file_name(img.name))
             .disable_notification(true)
             .await?
@@ -346,7 +345,7 @@ async fn upload_single_image(
     Ok(msg)
 }
 
-async fn send_the_old_way(
+async fn send_images_individually(
     bot: &teloxide::Bot,
     target: Recipient,
     images: Vec<Result<Image, (anyhow::Error, &'_ str)>>,
@@ -395,11 +394,13 @@ async fn send_the_old_way(
     Ok(())
 }
 
-fn image_too_large(img: &Image) -> bool {
+fn should_send_as_document(img: &Image) -> bool {
+    let is_oversize = img.width > TG_IMAGE_DIMENSION_LIMIT || img.height > TG_IMAGE_DIMENSION_LIMIT;
+    let is_overweight = img.data.len() > TG_IMAGE_SIZE_LIMIT;
+    let is_not_low_quality = img.data.len() > LOW_QUALITY_IMG_SIZE;
+    let is_long_form = std::cmp::max(img.width, img.height) as f32 / std::cmp::min(img.width, img.height) as f32 > 5.0;
     !img.is_gif()
-        && ((std::cmp::max(img.width, img.height) > TG_IMAGE_DIMENSION_LIMIT
-            && img.data.len() > LOW_QUALITY_IMG_SIZE)
-            || img.data.len() > TG_IMAGE_SIZE_LIMIT)
+        && ((is_oversize && is_not_low_quality)|| (is_oversize && is_long_form) || is_overweight)
 }
 
 fn format_caption(db: &database::Database, pic: &spider::Pic) -> Vec<String> {
